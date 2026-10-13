@@ -1,0 +1,815 @@
+syntax = "proto3";
+
+// easyops.v1: the OpsService — the network surface of the easyops ops server.
+//
+// easyops is the third core server (alongside easyvcs and artifact). The
+// gateway speaks ONLY this service over the cluster network; it no longer links
+// the easyops library. This service is DELIBERATELY policy-free: it authenticates
+// with a single shared service token (the cluster-internal caller, i.e. the
+// gateway) and performs NO per-owner authorization. Every request carries an
+// `owner` (the gateway fills it with the tenant); easyops only stamps it onto the
+// created object (Spec.Creator / annotation) and filters List* by it. Whether an
+// owner is genuine is the gateway's concern, never easyops'.
+package easyops.v1;
+
+option go_package = "github.com/easy-platform/easyops/gen/easyops/v1;opsv1";
+
+// ---- sandboxes ----
+
+// Sandbox is a live agent-worker sandbox view.
+message Sandbox {
+  string name = 1;
+  string image = 2;
+  string phase = 3; // Running / Pending / ... ('' when unknown)
+  bool ready = 4;
+  string url = 5;      // in-cluster Service URL
+  string owner = 6;    // Spec.Creator (opaque; NOT validated)
+  string session = 7;  // owning session (opaque)
+  int64 created_at = 8; // unix millis
+  // Pod diagnostics (best-effort): total container restarts and the first
+  // unhealthy container's reason+message (e.g. `OOMKilled`, `CrashLoopBackOff`,
+  // `RunContainerError`). Empty when healthy.
+  int32 restarts = 9;
+  string message = 10;
+  // More diagnostics (best-effort), so a Failed/Pending sandbox explains itself:
+  // the exit code + terminated reason of the (first unhealthy) container, the
+  // lastState reason (what it did before), the container name, and the
+  // container's start/finish times (unix millis; 0 = unset) to spot a startup
+  // timeout. `image` (field 2) is the image actually requested.
+  int32 exit_code = 11;
+  string terminated_reason = 12;
+  string last_state_reason = 13;
+  string container = 14;
+  int64 started_at = 15;
+  int64 finished_at = 16;
+}
+
+message CreateSandboxRequest {
+  // owner is opaque and unvalidated: it is written to the object's creator
+  // annotation and used to scope later List*/Get*/Delete* calls.
+  string owner = 1;
+  // session optionally binds the sandbox to a session (opaque; may be empty).
+  string session = 2;
+  string name = 3;
+  // image is REQUIRED: the sandbox runs a pre-built, worker-bundled image.
+  string image = 4;
+  string cpu = 5;
+  string memory = 6;
+  map<string, string> env = 7;
+  bool kvm = 8;
+  int32 gpu_count = 9;
+  // ready_timeout_seconds > 0 waits (bounded) for the worker to accept a TCP
+  // connection before returning; 0 returns as soon as the objects are created.
+  int32 ready_timeout_seconds = 10;
+  // golden_disk: the sandbox is a VM image (Windows/macOS) whose guest disk is
+  // fetched at runtime from GOLDEN_DISK_URL. easyops mounts a SHARED golden-disk
+  // cache PVC (read-write; the base is written once, then shared) at
+  // GOLDEN_DISK_CACHE (/storage/.cache) so multiple VM sandboxes reuse one base.
+  bool golden_disk = 11;
+  // volumes: extra PVCs to mount into the sandbox container (tenant-owned).
+  // read_only selects a read-only mount.
+  repeated VolumeMountSpec volumes = 12;
+}
+message CreateSandboxResponse {
+  Sandbox sandbox = 1;
+  // token is the sandbox worker's bearer token (also stored in its Secret).
+  string token = 2;
+}
+
+message ListSandboxesRequest {
+  string owner = 1;
+  // session, when non-empty, narrows to that session's sandboxes.
+  string session = 2;
+}
+message ListSandboxesResponse { repeated Sandbox sandboxes = 1; }
+
+message GetSandboxRequest {
+  string owner = 1;
+  string name = 2;
+}
+message GetSandboxResponse {
+  Sandbox sandbox = 1;
+  bool found = 2;
+}
+
+message ResolveSandboxRequest {
+  string owner = 1;
+  string name = 2;
+}
+message ResolveSandboxResponse {
+  string url = 1;
+  string token = 2;
+}
+
+message DeleteSandboxRequest {
+  string owner = 1;
+  string name = 2;
+}
+message DeleteSandboxResponse { bool deleted = 1; }
+// WatchWorkspace streams the owner's sandboxes, long-lived services and PVCs
+// live: an initial full snapshot, then a frame whenever any owned object
+// changes. EVERY frame is self-contained: it carries all three owner-filtered
+// lists (sandboxes / services / pvcs). The *_changed bit(s) flag the kind(s)
+// that changed since the previous frame (all configured kinds true on the
+// snapshot frame; a kind whose backend is absent stays false).
+message WatchWorkspaceRequest { string owner = 1; }
+message WatchWorkspaceResponse {
+  repeated Sandbox     sandboxes = 1;
+  // snapshot marks the first frame (the initial full lists).
+  bool                 snapshot  = 2;
+  // services / pvcs are the owner's long-lived services and claims (empty when
+  // the services backend is not configured).
+  repeated ServiceInfo services  = 3;
+  repeated PVCInfo     pvcs      = 4;
+  // *_changed flag the kind(s) that changed since the previous frame (all true
+  // on the snapshot frame).
+  bool sandboxes_changed = 5;
+  bool services_changed  = 6;
+  bool pvcs_changed      = 7;
+  // helm_releases are the owner's Helm releases (empty when the helm backend is
+  // not configured). The list mirrors HelmList (a slot release is surfaced via
+  // its router entry's Slots, never as its own row).
+  repeated HelmReleaseInfo helm_releases = 8;
+  bool helm_releases_changed = 9;
+}
+
+// ---- shared service/PVC value types ----
+
+// VolumeMountInfo is one PVC mounted into a service container.
+message VolumeMountInfo {
+  string pvc = 1;
+  string mount_path = 2;
+  bool read_only = 3;
+  string sub_path = 4;
+}
+
+// ProbeSpec is one container probe (readiness / liveness / startup). Exactly
+// one action should be set; `exec_command` wins over http_get over tcp_port.
+message ProbeSpec {
+  string http_path = 1;
+  int32 http_port = 2;
+  int32 tcp_port = 3;
+  repeated string exec_command = 4;
+  int32 initial_delay_seconds = 5;
+  int32 period_seconds = 6;
+  int32 timeout_seconds = 7;
+  int32 failure_threshold = 8;
+  int32 success_threshold = 9;
+}
+
+// ResourceSpec splits requests from limits (each optional).
+message ResourceSpec {
+  string cpu = 1;
+  string memory = 2;
+  string cpu_limit = 3;
+  string memory_limit = 4;
+}
+
+// EnvRefSpec injects one env var from a ConfigMap or Secret key.
+message EnvRefSpec {
+  string name = 1;
+  string config_map = 2;
+  string config_key = 3;
+  string secret = 4;
+  string secret_key = 5;
+}
+
+// EnvFromSpec injects ALL keys of a ConfigMap or Secret as env vars.
+message EnvFromSpec {
+  string config_map = 1;
+  string secret = 2;
+}
+
+// KeyToPath selects a key of a ConfigMap/Secret into a file `path`.
+message KeyToPath {
+  string key = 1;
+  string path = 2;
+}
+
+// ConfigMountSpec mounts a ConfigMap or Secret as a volume at `mount_path`.
+message ConfigMountSpec {
+  string config_map = 1;
+  string secret = 2;
+  string mount_path = 3;
+  repeated KeyToPath items = 4;
+}
+
+// SidecarSpec is an extra container in the service pod (init=true makes it an
+// init container).
+message SidecarSpec {
+  string name = 1;
+  string image = 2;
+  repeated string command = 3;
+  map<string, string> env = 4;
+  string cpu = 5;
+  string memory = 6;
+  bool init = 7;
+}
+
+// TolerationSpec is one pod toleration.
+message TolerationSpec {
+  string key = 1;
+  string operator = 2; // Equal | Exists
+  string value = 3;
+  string effect = 4; // NoSchedule | PreferNoSchedule | NoExecute
+}
+
+// RolloutSpec is the Deployment's RollingUpdate strategy.
+message RolloutSpec {
+  string max_surge = 1;
+  string max_unavailable = 2;
+}
+
+// ConfigMountInfo is a ConfigMap/Secret volume as observed on a live service.
+message ConfigMountInfo {
+  string config_map = 1;
+  string secret = 2;
+  string mount_path = 3;
+}
+
+// ServicePortSpec declares one exposed port of a deployed service.
+message ServicePortSpec {
+  // Service suffix. "" = the primary service (`<name>`); a non-empty value
+  // creates a SIBLING service named `<name>-<suffix>`.
+  string name = 1;
+  // Preset: tcp80 | tcp443 | udp443.
+  string preset = 2;
+  // Container port to forward to (0 = the request's container_port).
+  int32 target_port = 3;
+}
+
+// ServicePortInfo is one exposed port of a live service.
+message ServicePortInfo {
+  string name = 1;     // suffix ("" = the primary service)
+  string preset = 2;   // tcp80 | tcp443 | udp443
+  int32 port = 3;      // k8s Service port
+  string protocol = 4; // tcp | udp
+  int32 target_port = 5;
+}
+
+// VolumeMountSpec mounts a named PVC into a service container.
+message VolumeMountSpec {
+  string pvc = 1;
+  string mount_path = 2;
+  bool read_only = 3;
+  string sub_path = 4;
+}
+
+// ServiceInfo is a live long-lived service view.
+message ServiceInfo {
+  string name = 1;
+  string image = 2;
+  string phase = 3;
+  bool ready = 4;
+  int32 replicas = 5;
+  string url = 6;     // http://<name>.<ns>.svc.cluster.local:<service_port>
+  string owner = 7;   // owning tenant (opaque; NOT validated)
+  string session = 8; // deploying session (opaque; empty = unbound)
+  // Every port this service exposes (one k8s Service per distinct suffix).
+  repeated ServicePortInfo ports = 9;
+  reserved 10; // was stage ("release"/"preview"); preview was removed upstream
+  // Pod diagnostics (best-effort).
+  string pod_phase = 11;
+  int32 restarts = 12;
+  string message = 13;
+  reserved 14; // was expires_at (preview TTL); preview was removed upstream
+  bool paused = 15;      // scaled to zero by Pause (Resume restores the count)
+  int64 created_at = 16; // unix-millis creation time (list sort key)
+  int32 ready_replicas = 17;
+  string cpu = 18;
+  string memory = 19;
+  repeated string command = 20;
+  map<string, string> env = 21;
+  repeated VolumeMountInfo volumes = 22;
+  repeated ConfigMountInfo config_mounts = 23;
+  ResourceSpec resources = 24;
+  ProbeSpec readiness_probe = 25;
+  ProbeSpec liveness_probe = 26;
+  ProbeSpec startup_probe = 27;
+  RolloutSpec rollout = 28;
+  int32 sidecar_count = 29;
+  // revision is the Deployment's current rollout revision
+  // (`deployment.kubernetes.io/revision`), the target of RollbackService.
+  // NOTE: 30/31 were the removed blue-green fields (active_slot / slots). They
+  // are RESERVED (not reused) — reusing a field number with a different wire
+  // type breaks parsing during a mixed-version rollout.
+  reserved 30, 31;
+  int64 revision = 32;
+  // namespace is the tenant-internal namespace (the org segment of the creating
+  // session); used for tenant-internal read/write split. "" for legacy rows.
+  string namespace = 33;
+}
+
+// ---- services ----
+
+message DeployServiceRequest {
+  // owner is opaque and unvalidated (creator annotation + List* filter).
+  string owner = 1;
+  // session optionally binds the service to a session (opaque; may be empty).
+  string session = 2;
+  // Service name. Empty = derived from the session slug.
+  string name = 3;
+  // Container image to run as-is.
+  string image = 4;
+  int32 container_port = 5;
+  int32 service_port = 6;
+  int32 replicas = 7;
+  map<string, string> env = 8;
+  string cpu = 9;
+  string memory = 10;
+  repeated string command = 11;
+  bool kvm = 12;
+  int32 gpu_count = 13;
+  repeated ServicePortSpec services = 14;
+  repeated VolumeMountSpec volumes = 15;
+  ResourceSpec resources = 16;
+  ProbeSpec readiness_probe = 17;
+  ProbeSpec liveness_probe = 18;
+  ProbeSpec startup_probe = 19;
+  RolloutSpec rollout = 20;
+  repeated EnvRefSpec env_refs = 21;
+  repeated EnvFromSpec env_from = 22;
+  repeated ConfigMountSpec config_mounts = 23;
+  repeated SidecarSpec sidecars = 24;
+  map<string, string> node_selector = 25;
+  repeated TolerationSpec tolerations = 26;
+  reserved 27; // was blue-green slot; blue-green was removed.
+  // namespace is the caller's tenant-internal namespace (server-derived by the
+  // gateway from the session; recorded on the resource). "" = tenant default.
+  string namespace = 28;
+}
+message DeployServiceResponse { ServiceInfo service = 1; }
+
+message ListServicesRequest { string owner = 1; }
+message ListServicesResponse { repeated ServiceInfo services = 1; }
+
+message GetServiceRequest {
+  string owner = 1;
+  string name = 2;
+}
+message GetServiceResponse {
+  ServiceInfo service = 1;
+  bool found = 2;
+}
+
+message DeleteServiceRequest {
+  string owner = 1;
+  string name = 2;
+}
+message DeleteServiceResponse { bool deleted = 1; }
+
+// PauseService scales a service to zero replicas (remembering the prior count).
+message PauseServiceRequest {
+  string owner = 1;
+  string name = 2;
+}
+message PauseServiceResponse { ServiceInfo service = 1; }
+
+// ResumeService restores a paused service to its pre-pause replica count.
+message ResumeServiceRequest {
+  string owner = 1;
+  string name = 2;
+}
+message ResumeServiceResponse { ServiceInfo service = 1; }
+
+message ScaleServiceRequest {
+  string owner = 1;
+  string name = 2;
+  int32 replicas = 3;
+}
+message ScaleServiceResponse { ServiceInfo service = 1; }
+
+// GetServiceManifest returns the service's Deployment + Services as YAML.
+message GetServiceManifestRequest {
+  string owner = 1;
+  string name = 2;
+}
+message GetServiceManifestResponse { string yaml = 1; }
+
+// ApplyServiceManifest replaces a service from an edited multi-document YAML.
+message ApplyServiceManifestRequest {
+  string owner = 1;
+  string name = 2;
+  string yaml = 3;
+  bool dry_run = 4;
+}
+message ApplyServiceManifestResponse {
+  ServiceInfo service = 1;
+  string yaml = 2;
+}
+
+// RollbackService rolls a service's Deployment back to a prior revision
+// (k8s `rollout undo`). revision=0 undoes to the previous revision; a positive
+// revision rolls back TO that revision.
+message RollbackServiceRequest {
+  string owner = 1;
+  string name = 2;
+  int32 revision = 3; // 0 = the previous revision
+}
+message RollbackServiceResponse { ServiceInfo service = 1; }
+
+// ---- service logs ----
+
+message ServiceLogsRequest {
+  string owner = 1;
+  string name = 2;
+  int64 tail_lines = 3;
+  bool previous = 4;
+}
+
+message ServiceLogsResponse {
+  repeated string lines = 1;
+  // Pod diagnostics (best-effort), so a container that produced NO logs still
+  // explains why: a create/run failure (RunContainerError), a crash loop, a
+  // pending/failed schedule, etc.
+  string pod_phase = 2;
+  int32 restarts = 3;
+  string message = 4;
+  // True when the container produced any log output (so `lines` is the
+  // container's own stdout/stderr). False means the container never started (or
+  // has not yet) and the diagnostics above are the whole story.
+  bool available = 5;
+}
+
+message WatchServiceLogsRequest {
+  string owner = 1;
+  string name = 2;
+  bool previous = 3;
+}
+message WatchServiceLogsResponse {
+  string output = 1;
+  bool done = 2;
+  string error = 3;
+  // Pod diagnostics on the terminal frame (best-effort), for a container that
+  // never produced logs. Mirrors ServiceLogsResponse's fields.
+  string pod_phase = 4;
+  int32 restarts = 5;
+  string message = 6;
+}
+
+// ---- sandbox logs (diagnostics for a sandbox's own pod) ----
+
+message SandboxLogsRequest {
+  string owner = 1;
+  string name = 2;
+  int64 tail_lines = 3;
+  bool previous = 4;
+}
+
+message SandboxLogsResponse {
+  repeated string lines = 1;
+  // True when the container produced any log output.
+  bool available = 2;
+  // Pod diagnostics (best-effort), so a container that produced NO logs still
+  // explains why (a startup script exited non-zero, a crash loop, an image-pull
+  // failure, an unschedulable pod, ...). Mirrors Sandbox's diagnostics.
+  string pod_phase = 3;
+  int32 restarts = 4;
+  string message = 5;
+  int32 exit_code = 6;
+  string terminated_reason = 7;
+  string last_state_reason = 8;
+  // Recent Kubernetes events for the pod (best-effort, newest-first, bounded),
+  // each "reason: message" — e.g. FailedScheduling / BackOff / ImagePullBackOff.
+  // Empty when the caller lacks the `events` read permission.
+  repeated string events = 9;
+}
+
+message WatchSandboxLogsRequest {
+  string owner = 1;
+  string name = 2;
+  bool previous = 3;
+}
+message WatchSandboxLogsResponse {
+  string output = 1;
+  bool done = 2;
+  string error = 3;
+  // Pod diagnostics on the terminal frame (best-effort); mirrors
+  // SandboxLogsResponse's fields.
+  string pod_phase = 4;
+  int32 restarts = 5;
+  string message = 6;
+  int32 exit_code = 7;
+  string terminated_reason = 8;
+  string last_state_reason = 9;
+  repeated string events = 10;
+}
+
+// ---- PVCs ----
+
+message PVCInfo {
+  string name = 1;
+  string size = 2;
+  string storage_class = 3;
+  string phase = 4;
+  string owner = 5;      // owning tenant (opaque; NOT validated)
+  int64 created_at = 6;
+  repeated string mounted_by = 7;
+  // namespace is the tenant-internal namespace (see ServiceInfo.namespace).
+  string namespace = 8;
+}
+
+message CreatePVCRequest {
+  string owner = 1;
+  string name = 2;
+  string size = 3;
+  string storage_class = 4;
+  // namespace is the caller's tenant-internal namespace (see DeployServiceRequest).
+  string namespace = 5;
+}
+message CreatePVCResponse { PVCInfo pvc = 1; }
+
+message ListPVCsRequest { string owner = 1; }
+message ListPVCsResponse { repeated PVCInfo pvcs = 1; }
+
+message GetPVCRequest {
+  string owner = 1;
+  string name = 2;
+}
+message GetPVCResponse {
+  PVCInfo pvc = 1;
+  bool found = 2;
+}
+
+message DeletePVCRequest {
+  string owner = 1;
+  string name = 2;
+}
+message DeletePVCResponse { bool deleted = 1; }
+
+// ---- configmaps / secrets (for mounting into services) ----
+message ConfigMap {
+  string name = 1;
+  map<string, string> data = 2;
+  string owner = 3;      // owning tenant (opaque)
+  int64 created_at = 4;
+  string namespace = 5;  // tenant-internal namespace
+}
+message PutConfigMapRequest {
+  string name = 1;
+  map<string, string> data = 2;
+  string owner = 3;
+  string namespace = 4;
+  bool dry_run = 5;      // validate only
+}
+message PutConfigMapResponse { ConfigMap configmap = 1; }
+message GetConfigMapRequest { string name = 1; string owner = 2; }
+message GetConfigMapResponse { ConfigMap configmap = 1; bool found = 2; }
+message ListConfigMapsRequest { string owner = 1; }
+message ListConfigMapsResponse { repeated ConfigMap configmaps = 1; }
+message DeleteConfigMapRequest { string name = 1; string owner = 2; }
+message DeleteConfigMapResponse { bool deleted = 1; }
+
+message Secret {
+  string name = 1;
+  map<string, string> data = 2; // decoded values
+  string owner = 3;
+  int64 created_at = 4;
+  string namespace = 5;
+}
+message PutSecretRequest {
+  string name = 1;
+  map<string, string> data = 2;
+  string owner = 3;
+  string namespace = 4;
+  bool dry_run = 5;
+}
+message PutSecretResponse { Secret secret = 1; }
+message GetSecretRequest { string name = 1; string owner = 2; }
+message GetSecretResponse { Secret secret = 1; bool found = 2; }
+message ListSecretsRequest { string owner = 1; }
+message ListSecretsResponse { repeated Secret secrets = 1; }
+message DeleteSecretRequest { string name = 1; string owner = 2; }
+message DeleteSecretResponse { bool deleted = 1; }
+
+// ---- Helm ----
+
+message HelmReleaseInfo {
+  string name = 1;
+  string namespace = 2;
+  string owner = 3;   // owning tenant (opaque; NOT validated)
+  string session = 4;
+  string ref = 5;
+  string chart_path = 6;
+  int32 revision = 7;
+  string status = 8; // deployed | failed
+  int64 updated_at = 9;
+  reserved 10, 11, 12, 13; // was blue-green (slot/router/active_slot/slots)
+  // Chart/app version + applied objects of the CURRENT revision, so a release
+  // LIST view can show them without a separate HelmHistory call.
+  string chart_version = 14; // Chart.yaml `version` at the current revision
+  string app_version = 15;   // Chart.yaml `appVersion` (may be empty)
+  repeated string objects = 16; // "Kind/name" the current revision deployed
+  // org_namespace is the tenant-internal namespace (see ServiceInfo.namespace);
+  // distinct from the K8s `namespace` above.
+  string org_namespace = 17;
+}
+
+message HelmRevisionInfo {
+  int32 revision = 1;
+  string ref = 2;
+  string chart_path = 3;
+  string values = 4;
+  int64 created_at = 5;
+  repeated string objects = 6; // "Kind/name"
+}
+
+// HelmObjectInfo is the live status of one object a release deployed.
+message HelmObjectInfo {
+  string kind = 1;
+  string name = 2;
+  string namespace = 3;
+  // status is a coarse phase: Ready | Progressing | Failed | Complete |
+  // NotFound | <Pod phase> (Pending/Running/Succeeded/Failed).
+  string status = 4;
+  bool ready = 5;
+  // message is the first unhealthy container's waiting/terminated reason (e.g.
+  // CrashLoopBackOff), or the lookup error. Empty when healthy.
+  string message = 6;
+  // Pod/workload diagnostics (best-effort; zero when not applicable).
+  string phase = 7; // Pod phase
+  int32 restarts = 8;
+  int32 ready_replicas = 9;
+  int32 desired_replicas = 10;
+}
+
+message HelmObjectsRequest {
+  string owner = 1;
+  string release = 2;
+}
+message HelmObjectsResponse {
+  repeated HelmObjectInfo objects = 1;
+}
+
+message HelmObjectLogsRequest {
+  string owner = 1;
+  string release = 2;
+  string kind = 3; // must be "Pod"
+  string name = 4;
+  int64 tail_lines = 5;
+  bool previous = 6;
+  string container = 7; // "" = the pod's first container
+}
+message HelmObjectLogsResponse {
+  repeated string lines = 1;
+  bool available = 2;
+  string message = 3; // diagnostics when there is no log output (best-effort)
+}
+
+message HelmDeployRequest {
+  string owner = 1;
+  string release = 2;
+  string org = 3;
+  string repo = 4;
+  string ref = 5;
+  string chart_path = 6;
+  string values = 7;
+  bool dry_run = 8;
+  reserved 9; // was blue-green slot; blue-green was removed.
+  // session optionally binds the release to a session (opaque; may be empty).
+  string session = 10;
+  // archive is the repo tarball (tar.gz) to render the chart from. The caller
+  // (gateway) fetches it from the VCS and passes the bytes so easyops needs no
+  // VCS access.
+  bytes archive = 11;
+  // namespace is the caller's tenant-internal namespace (see DeployServiceRequest).
+  string namespace = 12;
+}
+message HelmDeployResponse {
+  HelmReleaseInfo release = 1;
+  string manifest = 2;
+  repeated string objects = 3;
+}
+
+message HelmListRequest { string owner = 1; }
+message HelmListResponse { repeated HelmReleaseInfo releases = 1; }
+
+message HelmHistoryRequest {
+  string owner = 1;
+  string release = 2;
+}
+message HelmHistoryResponse {
+  HelmReleaseInfo release = 1;
+  repeated HelmRevisionInfo revisions = 2;
+}
+
+message HelmRollbackRequest {
+  string owner = 1;
+  string release = 2;
+  int32 revision = 3; // 0 = the previous revision
+}
+message HelmRollbackResponse { HelmReleaseInfo release = 1; }
+
+message HelmUninstallRequest {
+  string owner = 1;
+  string release = 2;
+}
+message HelmUninstallResponse { bool deleted = 1; }
+
+// ---- image build / import ----
+
+// BuildImage builds an image from a repo Dockerfile via buildkit and pushes it
+// to the deployment registry. The repo tarball is supplied by the caller.
+message BuildImageRequest {
+  string owner = 1;
+  // archive is the repo tarball (tar.gz) to build from.
+  bytes archive = 2;
+  // Dockerfile path within the repo (default "Dockerfile").
+  string dockerfile = 3;
+  // Build-context subdirectory within the repo ("" = root).
+  string context = 4;
+  // Destination repo path under the registry, e.g. "<org>/<image>".
+  string repo = 5;
+  // Destination tag.
+  string tag = 6;
+  map<string, string> build_args = 7;
+}
+message BuildImageResponse {
+  string image_ref = 1;
+  string log = 2;
+}
+
+// BuildImageStream builds like BuildImage but STREAMS the build output as it is
+// produced, so a client can show the log live. The final event carries the
+// terminal state (done|failed), the image ref (on done) and the exit message
+// (on failed). `chunk` is the newly-produced stdout+stderr since the last event.
+message BuildImageStreamEvent {
+  string chunk = 1;
+  string state = 2;     // running | done | failed (final event = done|failed)
+  string image_ref = 3;
+  string error = 4;
+}
+
+// ImportImage mirrors an upstream image into the deployment registry with a
+// no-op `FROM <source>` rebuild.
+message ImportImageRequest {
+  string owner = 1;
+  string source = 2;
+  string repo = 3;
+  string tag = 4;
+  string auth_user = 5;
+  string auth_token = 6;
+}
+message ImportImageResponse {
+  string image_ref = 1;
+  string log = 2;
+}
+
+// OpsService is the easyops network surface.
+service OpsService {
+  // ---- sandboxes ----
+  rpc CreateSandbox(CreateSandboxRequest) returns (CreateSandboxResponse);
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse);
+  rpc GetSandbox(GetSandboxRequest) returns (GetSandboxResponse);
+  rpc ResolveSandbox(ResolveSandboxRequest) returns (ResolveSandboxResponse);
+  rpc DeleteSandbox(DeleteSandboxRequest) returns (DeleteSandboxResponse);
+  rpc SandboxLogs(SandboxLogsRequest) returns (SandboxLogsResponse);
+  rpc WatchSandboxLogs(WatchSandboxLogsRequest) returns (stream WatchSandboxLogsResponse);
+
+  // ---- long-lived services ----
+  rpc DeployService(DeployServiceRequest) returns (DeployServiceResponse);
+  rpc ListServices(ListServicesRequest) returns (ListServicesResponse);
+  rpc GetService(GetServiceRequest) returns (GetServiceResponse);
+  rpc DeleteService(DeleteServiceRequest) returns (DeleteServiceResponse);
+  rpc PauseService(PauseServiceRequest) returns (PauseServiceResponse);
+  rpc ResumeService(ResumeServiceRequest) returns (ResumeServiceResponse);
+  rpc ScaleService(ScaleServiceRequest) returns (ScaleServiceResponse);
+  rpc GetServiceManifest(GetServiceManifestRequest) returns (GetServiceManifestResponse);
+  rpc ApplyServiceManifest(ApplyServiceManifestRequest) returns (ApplyServiceManifestResponse);
+  rpc RollbackService(RollbackServiceRequest) returns (RollbackServiceResponse);
+  rpc ServiceLogs(ServiceLogsRequest) returns (ServiceLogsResponse);
+  rpc WatchServiceLogs(WatchServiceLogsRequest) returns (stream WatchServiceLogsResponse);
+
+  // ---- pvcs ----
+  rpc CreatePVC(CreatePVCRequest) returns (CreatePVCResponse);
+  rpc ListPVCs(ListPVCsRequest) returns (ListPVCsResponse);
+  rpc GetPVC(GetPVCRequest) returns (GetPVCResponse);
+  rpc DeletePVC(DeletePVCRequest) returns (DeletePVCResponse);
+
+  // ---- configmaps / secrets ----
+  rpc PutConfigMap(PutConfigMapRequest) returns (PutConfigMapResponse);
+  rpc GetConfigMap(GetConfigMapRequest) returns (GetConfigMapResponse);
+  rpc ListConfigMaps(ListConfigMapsRequest) returns (ListConfigMapsResponse);
+  rpc DeleteConfigMap(DeleteConfigMapRequest) returns (DeleteConfigMapResponse);
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+  rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
+
+  // ---- helm ----
+  rpc HelmDeploy(HelmDeployRequest) returns (HelmDeployResponse);
+  rpc HelmList(HelmListRequest) returns (HelmListResponse);
+  rpc HelmHistory(HelmHistoryRequest) returns (HelmHistoryResponse);
+  rpc HelmRollback(HelmRollbackRequest) returns (HelmRollbackResponse);
+  rpc HelmUninstall(HelmUninstallRequest) returns (HelmUninstallResponse);
+  rpc HelmObjects(HelmObjectsRequest) returns (HelmObjectsResponse);
+  rpc HelmObjectLogs(HelmObjectLogsRequest) returns (HelmObjectLogsResponse);
+
+  // ---- image build / import ----
+  rpc BuildImage(BuildImageRequest) returns (BuildImageResponse);
+  rpc BuildImageStream(BuildImageRequest) returns (stream BuildImageStreamEvent);
+  rpc ImportImage(ImportImageRequest) returns (ImportImageResponse);
+
+  // ---- live ----
+  rpc WatchWorkspace(WatchWorkspaceRequest) returns (stream WatchWorkspaceResponse);
+}

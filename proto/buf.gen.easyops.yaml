@@ -1,0 +1,14 @@
+version: v2
+# Generate the Connect (Go) bindings for easyops.v1. Local plugins
+# (protoc-gen-go / protoc-gen-connect-go) are used so generation needs no
+# network; install them with:
+#   go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+#   go install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
+# then run ./scripts/gen-proto.sh
+plugins:
+  - local: protoc-gen-go
+    out: ../gen
+    opt: paths=source_relative
+  - local: protoc-gen-connect-go
+    out: ../gen
+    opt: paths=source_relative

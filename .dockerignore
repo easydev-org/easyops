@@ -1,0 +1,7 @@
+# Local build logs / scratch.
+*.log
+# Git metadata + editor/OS noise.
+.git
+.gitignore
+*.swp
+.DS_Store

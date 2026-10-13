@@ -1,0 +1,131 @@
+package runtimeprofiles
+
+import (
+	"os"
+	"testing"
+)
+
+func TestRenderPlain(t *testing.T) {
+	r := DefaultSettings().Render(false, 0)
+	if r.NeedsTun || len(r.DeviceLimits) != 0 || r.SecurityContext != nil {
+		t.Fatalf("plain render not empty: %+v", r)
+	}
+}
+
+func TestRenderKVM(t *testing.T) {
+	r := DefaultSettings().Render(true, 0)
+	// KVM's tun now comes from the device plugin (squat.ai/tun), NOT a hostPath.
+	if r.NeedsTun || r.DeviceLimits["squat.ai/kvm"] != "1" || r.DeviceLimits["squat.ai/tun"] != "1" {
+		t.Fatalf("kvm render: %+v", r)
+	}
+	if len(r.Devices) != 1 || r.Devices[0] != "tun" {
+		t.Fatalf("kvm devices: %+v", r.Devices)
+	}
+	if r.SecurityContext == nil || r.SecurityContext.Privileged == nil || *r.SecurityContext.Privileged {
+		t.Fatal("kvm must never be privileged")
+	}
+	// SYS_ADMIN must NOT be granted: it enables container escape on a shared
+	// node, and the VM images boot + network with NET_ADMIN/MKNOD alone
+	// (verified live against the macOS / Windows / Android images).
+	caps := map[string]bool{}
+	if r.SecurityContext.Capabilities != nil {
+		for _, c := range r.SecurityContext.Capabilities.Add {
+			caps[string(c)] = true
+		}
+	}
+	if caps["SYS_ADMIN"] {
+		t.Fatal("kvm must not add SYS_ADMIN")
+	}
+	if !caps["NET_ADMIN"] || !caps["MKNOD"] {
+		t.Fatalf("kvm must keep NET_ADMIN + MKNOD, got %v", caps)
+	}
+}
+
+func TestRenderGPU(t *testing.T) {
+	s := DefaultSettings()
+	if got := s.Render(false, 3).DeviceLimits["nvidia.com/gpu"]; got != "3" {
+		t.Fatalf("gpu count = %q", got)
+	}
+	if _, ok := s.Render(false, 0).DeviceLimits["nvidia.com/gpu"]; ok {
+		t.Fatal("gpu requested with count 0")
+	}
+	// A GPU request MUST select the NVIDIA runtime class, or the driver devices
+	// are never mounted.
+	if got := s.Render(false, 1).RuntimeClass; got != "nvidia" {
+		t.Fatalf("gpu runtime class = %q, want nvidia", got)
+	}
+}
+
+func TestRenderKVMHasNoRuntimeClassByDefault(t *testing.T) {
+	if got := DefaultSettings().Render(true, 0).RuntimeClass; got != "" {
+		t.Fatalf("kvm default runtime class = %q, want empty", got)
+	}
+}
+
+func TestRenderGPUPlusKVM(t *testing.T) {
+	r := DefaultSettings().Render(true, 2)
+	if r.DeviceLimits["nvidia.com/gpu"] != "2" || r.DeviceLimits["squat.ai/kvm"] != "1" || r.DeviceLimits["squat.ai/tun"] != "1" {
+		t.Fatalf("gpu+kvm render: %+v", r)
+	}
+	if r.RuntimeClass != "nvidia" {
+		t.Fatalf("gpu+kvm runtime class = %q, want nvidia", r.RuntimeClass)
+	}
+}
+
+func TestDeviceLimitsFor(t *testing.T) {
+	s := DefaultSettings()
+	if got := s.DeviceLimitsFor([]string{"uinput", "drm"}); got["squat.ai/uinput"] != "1" || got["squat.ai/drm"] != "1" {
+		t.Fatalf("device limits: %+v", got)
+	}
+	if got := s.DeviceLimitsFor([]string{"nope"}); got != nil {
+		t.Fatalf("unknown device should yield nil, got %+v", got)
+	}
+	if got := s.DeviceLimitsFor(nil); got != nil {
+		t.Fatalf("no devices should yield nil, got %+v", got)
+	}
+}
+
+func TestKVMDevicesOverrideFallsBackToHostPathTun(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/r.json"
+	// Empty KVMDevices -> hostPath tun fallback (NeedsTun true).
+	if err := os.WriteFile(path, []byte(`{"kvmDevices":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := s.Render(true, 0); !r.NeedsTun || r.DeviceLimits["squat.ai/tun"] != "" {
+		t.Fatalf("hostPath fallback: %+v", r)
+	}
+}
+
+func TestLoadOverrideRuntimeClass(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/r.json"
+	if err := os.WriteFile(path, []byte(`{"gpuRuntimeClass":"nvidia-gpu","kvmRuntimeClass":"kvm"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.GPURuntimeClass != "nvidia-gpu" || s.KVMRuntimeClass != "kvm" {
+		t.Fatalf("override not applied: %+v", s)
+	}
+	if got := s.Render(true, 1).RuntimeClass; got != "nvidia-gpu" {
+		t.Fatalf("gpu wins when both requested: %q", got)
+	}
+	if got := s.Render(true, 0).RuntimeClass; got != "kvm" {
+		t.Fatalf("kvm-only runtime class = %q", got)
+	}
+}
+
+func TestLoadOverride(t *testing.T) {
+	// Missing file -> defaults.
+	s, err := Load("/nonexistent/runtimes.json")
+	if err != nil || s.KVMDevice != "squat.ai/kvm" {
+		t.Fatalf("defaults: %+v err=%v", s, err)
+	}
+}

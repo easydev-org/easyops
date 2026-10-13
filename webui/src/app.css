@@ -1,0 +1,73 @@
+@import 'tailwindcss';
+
+/*
+ * Design tokens — the SAME set as easy-vcs/agent-webui (a port of the Flutter
+ * app_theme.dart AppColors). Dark is the default here (an admin console).
+ */
+html[data-theme='light'],
+:root {
+  --background: #0a0a0a;
+  --foreground: #eeeeee;
+  --card: #141414;
+  --card-foreground: #eeeeee;
+  --popover: #1e1e1e;
+  --primary: #fab283;
+  --primary-foreground: #000000;
+  --secondary: #181818;
+  --muted: #181818;
+  --muted-foreground: #808080;
+  --accent: #9d7cd8;
+  --destructive: #e06c75;
+  --border: #484848;
+  --input: #3c3c3c;
+  --ring: #fab283;
+  --success: #7fd88f;
+  --warning: #f5a742;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+@utility text-micro {
+  font-size: 10px;
+  line-height: 1.4;
+}
+@utility text-meta {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+html, body, #app { height: 100%; }
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid var(--background); }
+::-webkit-scrollbar-track { background: transparent; }
+::selection { background: color-mix(in srgb, var(--primary) 35%, transparent); }

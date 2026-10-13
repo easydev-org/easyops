@@ -1,0 +1,2 @@
+# build artifacts (rebuilt from webui/ at build time)
+dist/

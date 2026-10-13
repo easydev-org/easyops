@@ -1,0 +1,394 @@
+package servicesmgr
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+)
+
+func newTestClient() *Client {
+	return NewWithClientset(fake.NewSimpleClientset(), Config{Namespace: "worker"})
+}
+
+func TestDeployListDelete(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+
+	svc, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t/s", ContainerPort: 8080, ServicePort: 80})
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	if svc.Name != "app" || svc.URL == "" || svc.Replicas != 1 {
+		t.Fatalf("bad service: %+v", svc)
+	}
+
+	list, err := c.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %v, %v", list, err)
+	}
+
+	// Idempotent redeploy.
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:2", Creator: "t/s"}); err != nil {
+		t.Fatalf("redeploy: %v", err)
+	}
+	got, _ := c.Get(ctx, "app")
+	if got.Image != "img:2" {
+		t.Fatalf("image not updated: %+v", got)
+	}
+
+	ok, err := c.Delete(ctx, "app")
+	if err != nil || !ok {
+		t.Fatalf("delete = %v, %v", ok, err)
+	}
+	if list, _ := c.List(ctx); len(list) != 0 {
+		t.Fatalf("still present: %+v", list)
+	}
+}
+
+func TestCorePortsGrouping(t *testing.T) {
+	// tcp80 + tcp443 + udp443 in one Service (unique names, 443/tcp + 443/udp coexist).
+	p := corePorts([]Port{
+		{Port: 80, Protocol: "tcp", TargetPort: 8080},
+		{Port: 443, Protocol: "tcp", TargetPort: 8443},
+		{Port: 443, Protocol: "udp", TargetPort: 8443},
+	})
+	if len(p) != 3 {
+		t.Fatalf("ports = %+v", p)
+	}
+	if p[0].Port != 80 || p[0].Protocol != corev1.ProtocolTCP {
+		t.Fatalf("first = %+v", p[0])
+	}
+	if p[2].Protocol != corev1.ProtocolUDP || p[2].Port != 443 {
+		t.Fatalf("udp443 = %+v", p[2])
+	}
+}
+
+func TestDeployDefaultExposesPort80(t *testing.T) {
+	c := newTestClient()
+	// No ports => default single tcp80 -> container port.
+	if _, err := c.Deploy(context.Background(), Spec{Name: "app", Image: "img:1", Creator: "t", ContainerPort: 8080}); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := c.cs.CoreV1().Services("worker").Get(context.Background(), "app", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Port != 80 || svc.Spec.Ports[0].TargetPort.IntVal != 8080 {
+		t.Fatalf("ports = %+v", svc.Spec.Ports)
+	}
+}
+
+func TestDeployMultiPortAndSibling(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	// primary: tcp80 + udp443; sibling "admin": tcp80 -> 8081.
+	_, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t", ContainerPort: 8080, Ports: []Port{
+		{Port: 80, Protocol: "tcp", TargetPort: 8080},
+		{Port: 443, Protocol: "udp", TargetPort: 8080},
+		{Suffix: "admin", Port: 80, Protocol: "tcp", TargetPort: 8081},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, _ := c.cs.CoreV1().Services("worker").Get(ctx, "app", metav1.GetOptions{})
+	if len(primary.Spec.Ports) != 2 {
+		t.Fatalf("primary ports = %+v", primary.Spec.Ports)
+	}
+	sib, err := c.cs.CoreV1().Services("worker").Get(ctx, "app-admin", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("sibling missing: %v", err)
+	}
+	if len(sib.Spec.Ports) != 1 || sib.Spec.Ports[0].TargetPort.IntVal != 8081 {
+		t.Fatalf("sibling ports = %+v", sib.Spec.Ports)
+	}
+	// Delete removes both services.
+	if ok, err := c.Delete(ctx, "app"); err != nil || !ok {
+		t.Fatalf("delete = %v %v", ok, err)
+	}
+	if _, err := c.cs.CoreV1().Services("worker").Get(ctx, "app-admin", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("sibling not deleted: %v", err)
+	}
+}
+
+func TestDeleteBySession(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "a", Image: "i", Creator: "t", Session: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Deploy(ctx, Spec{Name: "b", Image: "i", Creator: "t", Session: "s2"}); err != nil {
+		t.Fatal(err)
+	}
+	names, err := c.DeleteBySession(ctx, "s1")
+	if err != nil || len(names) != 1 || names[0] != "a" {
+		t.Fatalf("delete by session = %v, %v", names, err)
+	}
+	if _, err := c.Get(ctx, "b"); err != nil {
+		t.Fatal("a service of another session must survive")
+	}
+}
+
+func TestPauseResume(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "i:1", Creator: "t", Replicas: 3}); err != nil {
+		t.Fatal(err)
+	}
+	// Pause scales to zero and remembers the prior count.
+	p, err := c.Pause(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Paused || p.Replicas != 0 {
+		t.Fatalf("pause view = %+v", p)
+	}
+	// Idempotent pause keeps the ORIGINAL remembered count.
+	if _, err := c.Pause(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	// Resume restores 3 and clears the marker.
+	r, err := c.Resume(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Paused || r.Replicas != 3 {
+		t.Fatalf("resume view = %+v", r)
+	}
+}
+
+func TestResumeDefaultsToOne(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "i:1", Creator: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Pause(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	// Clear the marker to simulate a legacy paused object.
+	d, _ := c.cs.AppsV1().Deployments("worker").Get(ctx, "app", metav1.GetOptions{})
+	delete(d.Annotations, AnnoReplicasBeforePause)
+	if _, err := c.cs.AppsV1().Deployments("worker").Update(ctx, d, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Resume(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Replicas != 1 {
+		t.Fatalf("resume default = %+v", r)
+	}
+}
+
+func TestPVCreateListDelete(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+
+	p, err := c.CreatePVC(ctx, "data", "2Gi", "workspace-local", "t/s", "")
+	if err != nil {
+		t.Fatalf("create pvc: %v", err)
+	}
+	if p.Name != "data" || p.Size != "2Gi" || p.StorageClass != "workspace-local" || p.Creator != "t/s" {
+		t.Fatalf("bad pvc: %+v", p)
+	}
+	// Idempotent re-create (same creator) returns the existing claim.
+	if _, err := c.CreatePVC(ctx, "data", "9Gi", "workspace-local", "t/s", ""); err != nil {
+		t.Fatalf("recreate: %v", err)
+	}
+	if got, _ := c.GetPVC(ctx, "data"); got.Size != "2Gi" {
+		t.Fatalf("size changed on recreate: %+v", got)
+	}
+	// A different creator is refused.
+	if _, err := c.CreatePVC(ctx, "data", "1Gi", "workspace-local", "other", ""); err == nil {
+		t.Fatal("expected foreign-creator refusal")
+	}
+	if list, _ := c.ListPVCs(ctx); len(list) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	if ok, err := c.DeletePVC(ctx, "data"); err != nil || !ok {
+		t.Fatalf("delete = %v %v", ok, err)
+	}
+}
+
+func TestDeletePVCRefusedWhileMounted(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.CreatePVC(ctx, "data", "1Gi", "workspace-local", "t", ""); err != nil {
+		t.Fatal(err)
+	}
+	// A service mounting the claim.
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t", Volumes: []VolumeMount{
+		{PVC: "data", MountPath: "/var/lib/data"},
+	}}); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	// The claim reports its mounter and delete is refused.
+	got, _ := c.GetPVC(ctx, "data")
+	if len(got.MountedBy) != 1 || got.MountedBy[0] != "app" {
+		t.Fatalf("mountedBy = %+v", got.MountedBy)
+	}
+	if ok, err := c.DeletePVC(ctx, "data"); err == nil || ok {
+		t.Fatalf("expected refusal, got ok=%v err=%v", ok, err)
+	}
+	// After the service is gone the delete succeeds.
+	if _, err := c.Delete(ctx, "app"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := c.DeletePVC(ctx, "data"); err != nil || !ok {
+		t.Fatalf("delete after unmount = %v %v", ok, err)
+	}
+}
+
+func TestDeployMountsPVC(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t", Volumes: []VolumeMount{
+		{PVC: "data", MountPath: "/data", ReadOnly: true, SubPath: "sub"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	d, err := c.cs.AppsV1().Deployments("worker").Get(ctx, "app", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vols := d.Spec.Template.Spec.Volumes
+	if len(vols) != 1 || vols[0].PersistentVolumeClaim == nil || vols[0].PersistentVolumeClaim.ClaimName != "data" {
+		t.Fatalf("volumes = %+v", vols)
+	}
+	mounts := d.Spec.Template.Spec.Containers[0].VolumeMounts
+	if len(mounts) != 1 || mounts[0].MountPath != "/data" || !mounts[0].ReadOnly || mounts[0].SubPath != "sub" {
+		t.Fatalf("mounts = %+v", mounts)
+	}
+}
+
+func TestDeployRefusesForeignService(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	// A pre-existing Service NOT managed by us, sharing the target name.
+	foreign := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-admin", Namespace: "worker"},
+	}
+	if _, err := c.cs.CoreV1().Services("worker").Create(ctx, foreign, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t", ContainerPort: 8080, Ports: []Port{
+		{Suffix: "admin", Port: 80, Protocol: "tcp", TargetPort: 8080},
+	}})
+	if err == nil {
+		t.Fatal("expected refusal to clobber a foreign Service")
+	}
+}
+
+func TestScaleAndManifest(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "img:1", Creator: "t", ContainerPort: 8080, CPU: "250m", Memory: "128Mi",
+		Env: map[string]string{"A": "1"}, Volumes: []VolumeMount{{PVC: "data", MountPath: "/data"}}}); err != nil {
+		t.Fatal(err)
+	}
+	scaled, err := c.Scale(ctx, "app", 3)
+	if err != nil || scaled.Replicas != 3 {
+		t.Fatalf("scale: %+v, %v", scaled, err)
+	}
+	if scaled.CPU != "250m" || scaled.Memory != "128Mi" || scaled.Env["A"] != "1" || len(scaled.Volumes) != 1 {
+		t.Fatalf("detail not populated: %+v", scaled)
+	}
+	y, err := c.Manifest(ctx, "app")
+	if err != nil || y == "" {
+		t.Fatalf("manifest: %v", err)
+	}
+	if !strings.Contains(y, "kind: Deployment") || !strings.Contains(y, "kind: Service") {
+		t.Fatalf("manifest missing docs:\n%s", y)
+	}
+	// Apply a scale-up via YAML and verify.
+	edited := strings.Replace(y, "replicas: 3", "replicas: 5", 1)
+	out, norm, err := c.ApplyManifest(ctx, "app", edited, false)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if out.Replicas != 5 || !strings.Contains(norm, "replicas: 5") {
+		t.Fatalf("apply result: %+v\n%s", out, norm)
+	}
+	// A foreign deployment name is refused.
+	wrong := "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: other\nspec:\n  template:\n    spec:\n      containers:\n      - name: svc\n        image: img:1\n"
+	if _, _, err := c.ApplyManifest(ctx, "app", wrong, false); err == nil {
+		t.Fatal("expected refusal for a mismatched deployment name")
+	}
+}
+
+func TestDeployTier0(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	_, err := c.Deploy(ctx, Spec{
+		Name: "app", Image: "img:1", Creator: "t", ContainerPort: 8080,
+		Resources:      Resources{CPURequest: "100m", MemoryRequest: "128Mi", CPULimit: "1", MemoryLimit: "512Mi"},
+		ReadinessProbe: Probe{HTTPPort: 8080, HTTPPath: "/healthz", InitialDelaySeconds: 3},
+		LivenessProbe:  Probe{Exec: []string{"true"}},
+		Rollout:        Rollout{MaxSurge: "25%", MaxUnavailable: "0"},
+		EnvRefs:        []EnvRef{{Name: "DB", ConfigMap: "cfg", ConfigKey: "db"}},
+		EnvFrom:        []EnvFrom{{Secret: "sec"}},
+		ConfigMounts:   []ConfigMount{{ConfigMap: "cfg", MountPath: "/etc/cfg"}},
+		Sidecars:       []Sidecar{{Name: "helper", Image: "busybox", Init: true}, {Name: "log", Image: "busybox"}},
+		NodeSelector:   map[string]string{"disk": "ssd"},
+		Tolerations:    []Toleration{{Key: "dedicated", Operator: "Exists", Effect: "NoSchedule"}},
+	})
+	if err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	d, err := c.cs.AppsV1().Deployments("worker").Get(ctx, "app", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctr := d.Spec.Template.Spec.Containers[0]
+	if ctr.Resources.Requests.Cpu().String() != "100m" || ctr.Resources.Limits.Memory().String() != "512Mi" {
+		t.Fatalf("resources = %+v", ctr.Resources)
+	}
+	if ctr.ReadinessProbe == nil || ctr.ReadinessProbe.HTTPGet == nil || ctr.ReadinessProbe.HTTPGet.Path != "/healthz" {
+		t.Fatalf("readiness = %+v", ctr.ReadinessProbe)
+	}
+	if ctr.LivenessProbe == nil || ctr.LivenessProbe.Exec == nil {
+		t.Fatalf("liveness = %+v", ctr.LivenessProbe)
+	}
+	if d.Spec.Strategy.RollingUpdate == nil || d.Spec.Strategy.RollingUpdate.MaxSurge.String() != "25%" {
+		t.Fatalf("rollout = %+v", d.Spec.Strategy)
+	}
+	if len(d.Spec.Template.Spec.InitContainers) != 1 || d.Spec.Template.Spec.InitContainers[0].Name != "helper" {
+		t.Fatalf("init = %+v", d.Spec.Template.Spec.InitContainers)
+	}
+	if len(d.Spec.Template.Spec.Containers) != 2 || d.Spec.Template.Spec.Containers[1].Name != "log" {
+		t.Fatalf("containers = %+v", d.Spec.Template.Spec.Containers)
+	}
+	if d.Spec.Template.Spec.NodeSelector["disk"] != "ssd" || len(d.Spec.Template.Spec.Tolerations) != 1 {
+		t.Fatalf("scheduling = %+v %+v", d.Spec.Template.Spec.NodeSelector, d.Spec.Template.Spec.Tolerations)
+	}
+	// Round-trip: the read-back service surfaces the Tier 0 detail.
+	got, err := c.Get(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Resources.CPULimit != "1" || got.ReadinessProbe.HTTPPath != "/healthz" || got.SidecarCount != 2 {
+		t.Fatalf("readback = %+v", got)
+	}
+	if len(got.ConfigMounts) != 1 || got.ConfigMounts[0].ConfigMap != "cfg" {
+		t.Fatalf("config mounts = %+v", got.ConfigMounts)
+	}
+}
+
+func TestDeployTier0Validation(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, err := c.Deploy(ctx, Spec{Name: "app", Image: "img", EnvRefs: []EnvRef{{Name: "X"}}}); err == nil {
+		t.Fatal("expected env_ref validation error")
+	}
+	if _, err := c.Deploy(ctx, Spec{Name: "app2", Image: "img", ConfigMounts: []ConfigMount{{ConfigMap: "c"}}}); err == nil {
+		t.Fatal("expected config_mount mount_path error")
+	}
+	if _, err := c.Deploy(ctx, Spec{Name: "app3", Image: "img", Sidecars: []Sidecar{{Name: "x"}}}); err == nil {
+		t.Fatal("expected sidecar image error")
+	}
+}
