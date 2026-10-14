@@ -29,6 +29,26 @@ BASE_NAMESPACE="${BASE_NAMESPACE:-root}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
+# `--artifacts`: build ONLY the artifacts (binary + webui), no container image.
+if [ "${1:-}" = "--artifacts" ]; then
+  OUT="${OUT:-${DIR}/dist}"
+  rm -rf "${OUT}"; mkdir -p "${OUT}"
+  echo "Building artifacts -> ${OUT} (buildkitd=${BUILDKIT})"
+  buildctl --addr "${BUILDKIT}" build \
+    --frontend dockerfile.v0 \
+    --local "context=${DIR}" \
+    --local "dockerfile=${DIR}" \
+    --opt "filename=Containerfile.build" \
+    --opt "build-arg:REGISTRY=${REGISTRY}/${BASE_NAMESPACE}" \
+    --opt "build-arg:HTTP_PROXY=${PROXY}" \
+    --opt "build-arg:HTTPS_PROXY=${PROXY}" \
+    --opt "build-arg:NO_PROXY=localhost,127.0.0.1,.svc.cluster.local,.svc" \
+    --output "type=local,dest=${OUT}" \
+    --progress plain
+  echo "Artifacts in ${OUT}:"; find "${OUT}" -type f | sort
+  exit 0
+fi
+
 echo "Building ${NAME} image -> ${DEST} (buildkitd=${BUILDKIT})"
 buildctl --addr "${BUILDKIT}" build \
   --frontend dockerfile.v0 \

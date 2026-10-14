@@ -6,9 +6,10 @@ import (
 	"net/http"
 )
 
-// The web UI (Svelte 5 + Vite + Tailwind, built by ../webui → ./ui/dist) is
-// embedded so the binary serves it with no external files. `all:` includes the
-// Vite hashed assets. The build is committed, so `go build` needs no node.
+// The web UI (Svelte 5 + Vite + Tailwind, from the easyops-webui repo,
+// github.com/easydev-org/easyops-webui) is embedded so the binary serves it with
+// no external files. `all:` includes the Vite hashed assets. ui/dist is built by
+// the Containerfile's node stage (it is NOT committed).
 //
 //go:embed all:ui/dist
 var uiDist embed.FS

@@ -6,6 +6,18 @@
 # the artifact Service host (`IMAGE_REGISTRY_HOST`) plus the namespace that
 # holds the base images (e.g. `root` or `agent-toolchain`).
 ARG REGISTRY=git.agent.svc.cluster.local/root
+# ---- webui (node) ----
+FROM ${REGISTRY}/node:22-alpine AS webui
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG EASYOPS_WEBUI_REPO=https://github.com/easydev-org/easyops-webui.git
+ARG EASYOPS_WEBUI_REF=main
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
+RUN apk add --no-cache git ca-certificates \
+    && git clone --depth 1 --branch "${EASYOPS_WEBUI_REF}" "${EASYOPS_WEBUI_REPO}" /webui \
+    && cd /webui && npm ci --no-audit --no-fund && OUT_DIR=dist npm run build
+
+# ---- build (go) ----
 FROM ${REGISTRY}/golang:1.26-alpine AS build
 ARG HTTP_PROXY
 ARG HTTPS_PROXY
@@ -25,6 +37,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
+COPY --from=webui /webui/dist/ cmd/easyops/ui/dist/
 RUN CGO_ENABLED=0 go build -mod=mod -trimpath -ldflags "-s -w" -o /out/easyops ./cmd/easyops
 
 FROM ${REGISTRY}/alpine:3.24
