@@ -32,6 +32,7 @@ import (
 	"github.com/easy-platform/easyops/internal/platform/obs"
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
+	"github.com/easy-platform/easyops/internal/buildreg"
 	"github.com/easy-platform/easyops/internal/imagebuild"
 	"github.com/easy-platform/easyops/internal/jobmgr"
 	"github.com/easy-platform/easyops/internal/k8scheck"
@@ -139,6 +140,12 @@ func main() {
 		log.Printf("warn: services backend is NIL: PVC/service RPCs are unavailable and golden_disk cannot create its shared cache PVC")
 	}
 	builder := newImageBuilder()
+	// Asynchronous-build registry. It is PROCESS MEMORY by design (see
+	// buildreg): a restart clears it and each replica keeps its own set, which
+	// is the right trade for a live view of recent builds and keeps easyops
+	// stateless. BUILD_MAX_RECORDS caps it; each record holds at most a few KiB
+	// of log tail, so the cap is the memory ceiling.
+	builds := buildreg.New(envOrInt("BUILD_MAX_RECORDS", buildreg.DefaultMaxRecords))
 	// Jobs backend (batch/v1): run-to-completion workloads (one-shot builds,
 	// migrations, test runs). Same construction contract as services.
 	jobs, err := jobmgr.New(jobmgr.Config{
@@ -158,6 +165,7 @@ func main() {
 		DefaultSandboxImage: os.Getenv("DEFAULT_SANDBOX_IMAGE"),
 		Services:            services,
 		Builder:             builder,
+		Builds:              builds,
 		Jobs:                jobs,
 		PVCStorageClass:     os.Getenv("PVC_STORAGE_CLASS"),
 		PVCDefaultSize:      envOr("PVC_DEFAULT_SIZE", "1Gi"),

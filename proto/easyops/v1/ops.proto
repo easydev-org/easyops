@@ -672,6 +672,75 @@ message BuildImageStreamEvent {
   int32 steps_cached = 7;
 }
 
+// ---- build records (asynchronous builds) ----
+
+// BuildRecord is one asynchronous build.
+//
+// BuildImage/BuildImageStream are single blocking RPCs: a build has no
+// identity, and once the call returns nothing is left to query. CreateBuild
+// returns immediately with an id, and the build runs in the background, so a
+// caller can poll GetBuild / ListBuilds and cancel with CancelBuild.
+//
+// DURABILITY: records live in the easyops PROCESS MEMORY, deliberately (no DB,
+// no PVC - easyops stays stateless). A restart clears them, and a
+// multi-replica deployment has one independent set per replica. Treat this as a
+// view of recent activity, not an audit log. `durability` says so explicitly.
+message BuildRecord {
+  string id = 1;
+  string owner = 2;
+  string repo = 3;
+  string tag = 4;
+  // image is the resolved reference (only set when state=done).
+  string image = 5;
+  // state is running | done | failed | canceled.
+  string state = 6;
+  // error is the failure message (state=failed) or the cancel reason.
+  string error = 7;
+  // log holds the TAIL of the build output (bounded; a failure explains itself
+  // at the end).
+  string log = 8;
+  int64 started_at = 9;  // unix millis
+  int64 finished_at = 10; // unix millis (0 while running)
+  // cache_used reports whether registry cache import/export was requested.
+  bool cache_used = 11;
+  // durability is always "memory" today, so a client can never mistake a
+  // record for durable history.
+  string durability = 12;
+}
+
+message CreateBuildRequest {
+  string owner = 1;
+  string session = 2;
+  // Same fields as BuildImageRequest.
+  bytes archive = 3;
+  string dockerfile = 4;
+  string context = 5;
+  string repo = 6;
+  string tag = 7;
+  map<string, string> build_args = 8;
+  CacheOptions image_cache = 9;
+}
+message CreateBuildResponse { BuildRecord build = 1; }
+
+message ListBuildsRequest {
+  string owner = 1;
+  // limit caps the result (0 = everything the registry holds, newest first).
+  int32 limit = 2;
+}
+message ListBuildsResponse { repeated BuildRecord builds = 1; }
+
+message GetBuildRequest {
+  string owner = 1;
+  string id = 2;
+}
+message GetBuildResponse { BuildRecord build = 1; bool found = 2; }
+
+message CancelBuildRequest {
+  string owner = 1;
+  string id = 2;
+}
+message CancelBuildResponse { BuildRecord build = 1; bool found = 2; }
+
 // ImportImage mirrors an upstream image into the deployment registry with a
 // no-op `FROM <source>` rebuild.
 message ImportImageRequest {
@@ -831,6 +900,15 @@ service OpsService {
   rpc BuildImage(BuildImageRequest) returns (BuildImageResponse);
   rpc BuildImageStream(BuildImageRequest) returns (stream BuildImageStreamEvent);
   rpc ImportImage(ImportImageRequest) returns (ImportImageResponse);
+
+  // ---- asynchronous builds (identity + history) ----
+  // CreateBuild returns immediately; the build runs in the background with an
+  // id, so a caller can list, inspect and cancel it. Records live in the
+  // easyops process memory (see BuildRecord.durability).
+  rpc CreateBuild(CreateBuildRequest) returns (CreateBuildResponse);
+  rpc ListBuilds(ListBuildsRequest) returns (ListBuildsResponse);
+  rpc GetBuild(GetBuildRequest) returns (GetBuildResponse);
+  rpc CancelBuild(CancelBuildRequest) returns (CancelBuildResponse);
 
   // ---- jobs (run-to-completion workloads) ----
   // A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot

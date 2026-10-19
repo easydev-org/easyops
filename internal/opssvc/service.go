@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
+	"github.com/easy-platform/easyops/internal/buildreg"
 	"github.com/easy-platform/easyops/internal/imagebuild"
 	"github.com/easy-platform/easyops/internal/jobmgr"
 	"github.com/easy-platform/easyops/internal/k8scheck"
@@ -38,6 +39,9 @@ type Service struct {
 
 	services *servicesmgr.Client
 	builder  *imagebuild.Builder
+	// builds is the in-memory registry behind CreateBuild/ListBuilds/GetBuild/
+	// CancelBuild (nil = those RPCs are unavailable).
+	builds *buildreg.Registry
 	// jobs is the run-to-completion (batch/v1.Job) backend (nil = unavailable).
 	jobs *jobmgr.Client
 
@@ -80,6 +84,9 @@ type Deps struct {
 	Services *servicesmgr.Client
 	// Builder is the image build/import backend (nil = unavailable).
 	Builder *imagebuild.Builder
+	// Builds is the in-memory registry for asynchronous builds (nil =
+	// CreateBuild/ListBuilds/GetBuild/CancelBuild are unavailable).
+	Builds *buildreg.Registry
 	// Jobs is the run-to-completion (batch/v1.Job) backend (nil = unavailable).
 	Jobs *jobmgr.Client
 	// PVCStorageClass is the deployment's storage class for CreatePVC (empty =
@@ -128,6 +135,7 @@ func New(d Deps) *Service {
 		services:               d.Services,
 		jobs:                   d.Jobs,
 		builder:                d.Builder,
+		builds:                 d.Builds,
 		pvcStorageClass:        d.PVCStorageClass,
 		pvcDefaultSize:         d.PVCDefaultSize,
 		goldenDiskCachePVC:     d.GoldenDiskCachePVC,

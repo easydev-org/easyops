@@ -107,6 +107,14 @@ const (
 	OpsServiceBuildImageStreamProcedure = "/easyops.v1.OpsService/BuildImageStream"
 	// OpsServiceImportImageProcedure is the procedure name of the OpsService's ImportImage RPC.
 	OpsServiceImportImageProcedure = "/easyops.v1.OpsService/ImportImage"
+	// OpsServiceCreateBuildProcedure is the procedure name of the OpsService's CreateBuild RPC.
+	OpsServiceCreateBuildProcedure = "/easyops.v1.OpsService/CreateBuild"
+	// OpsServiceListBuildsProcedure is the procedure name of the OpsService's ListBuilds RPC.
+	OpsServiceListBuildsProcedure = "/easyops.v1.OpsService/ListBuilds"
+	// OpsServiceGetBuildProcedure is the procedure name of the OpsService's GetBuild RPC.
+	OpsServiceGetBuildProcedure = "/easyops.v1.OpsService/GetBuild"
+	// OpsServiceCancelBuildProcedure is the procedure name of the OpsService's CancelBuild RPC.
+	OpsServiceCancelBuildProcedure = "/easyops.v1.OpsService/CancelBuild"
 	// OpsServiceCreateJobProcedure is the procedure name of the OpsService's CreateJob RPC.
 	OpsServiceCreateJobProcedure = "/easyops.v1.OpsService/CreateJob"
 	// OpsServiceListJobsProcedure is the procedure name of the OpsService's ListJobs RPC.
@@ -362,6 +370,34 @@ var (
 			Procedure:  OpsServiceImportImageProcedure,
 		}
 	})
+	opsServiceCreateBuildSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("CreateBuild"),
+			Procedure:  OpsServiceCreateBuildProcedure,
+		}
+	})
+	opsServiceListBuildsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("ListBuilds"),
+			Procedure:  OpsServiceListBuildsProcedure,
+		}
+	})
+	opsServiceGetBuildSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("GetBuild"),
+			Procedure:  OpsServiceGetBuildProcedure,
+		}
+	})
+	opsServiceCancelBuildSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("CancelBuild"),
+			Procedure:  OpsServiceCancelBuildProcedure,
+		}
+	})
 	opsServiceCreateJobSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -454,6 +490,14 @@ type OpsServiceClient interface {
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest) (OpsServiceBuildImageStreamClientStream, error)
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
+	// ---- asynchronous builds (identity + history) ----
+	// CreateBuild returns immediately; the build runs in the background with an
+	// id, so a caller can list, inspect and cancel it. Records live in the
+	// easyops process memory (see BuildRecord.durability).
+	CreateBuild(context.Context, *v1.CreateBuildRequest) (*v1.CreateBuildResponse, error)
+	ListBuilds(context.Context, *v1.ListBuildsRequest) (*v1.ListBuildsResponse, error)
+	GetBuild(context.Context, *v1.GetBuildRequest) (*v1.GetBuildResponse, error)
+	CancelBuild(context.Context, *v1.CancelBuildRequest) (*v1.CancelBuildResponse, error)
 	// ---- jobs (run-to-completion workloads) ----
 	// A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot
 	// buildctl pod, a migration, or a test run. It is distinct from a Service
@@ -619,6 +663,14 @@ type OpsServiceHandler interface {
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest, OpsServiceBuildImageStreamServerStream) error
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
+	// ---- asynchronous builds (identity + history) ----
+	// CreateBuild returns immediately; the build runs in the background with an
+	// id, so a caller can list, inspect and cancel it. Records live in the
+	// easyops process memory (see BuildRecord.durability).
+	CreateBuild(context.Context, *v1.CreateBuildRequest) (*v1.CreateBuildResponse, error)
+	ListBuilds(context.Context, *v1.ListBuildsRequest) (*v1.ListBuildsResponse, error)
+	GetBuild(context.Context, *v1.GetBuildRequest) (*v1.GetBuildResponse, error)
+	CancelBuild(context.Context, *v1.CancelBuildRequest) (*v1.CancelBuildResponse, error)
 	// ---- jobs (run-to-completion workloads) ----
 	// A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot
 	// buildctl pod, a migration, or a test run. It is distinct from a Service
@@ -671,6 +723,10 @@ func RegisterOpsServiceHandler(server *connect.Server, svc OpsServiceHandler) {
 		connect.Method{Spec: opsServiceBuildImageSpec(), Handler: adapter.buildImage},
 		connect.Method{Spec: opsServiceBuildImageStreamSpec(), Handler: adapter.buildImageStream},
 		connect.Method{Spec: opsServiceImportImageSpec(), Handler: adapter.importImage},
+		connect.Method{Spec: opsServiceCreateBuildSpec(), Handler: adapter.createBuild},
+		connect.Method{Spec: opsServiceListBuildsSpec(), Handler: adapter.listBuilds},
+		connect.Method{Spec: opsServiceGetBuildSpec(), Handler: adapter.getBuild},
+		connect.Method{Spec: opsServiceCancelBuildSpec(), Handler: adapter.cancelBuild},
 		connect.Method{Spec: opsServiceCreateJobSpec(), Handler: adapter.createJob},
 		connect.Method{Spec: opsServiceListJobsSpec(), Handler: adapter.listJobs},
 		connect.Method{Spec: opsServiceGetJobSpec(), Handler: adapter.getJob},
@@ -897,6 +953,22 @@ func (UnimplementedOpsServiceHandler) BuildImageStream(context.Context, *v1.Buil
 
 func (UnimplementedOpsServiceHandler) ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.ImportImage is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) CreateBuild(context.Context, *v1.CreateBuildRequest) (*v1.CreateBuildResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.CreateBuild is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) ListBuilds(context.Context, *v1.ListBuildsRequest) (*v1.ListBuildsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.ListBuilds is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) GetBuild(context.Context, *v1.GetBuildRequest) (*v1.GetBuildResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.GetBuild is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) CancelBuild(context.Context, *v1.CancelBuildRequest) (*v1.CancelBuildResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.CancelBuild is not implemented")
 }
 
 func (UnimplementedOpsServiceHandler) CreateJob(context.Context, *v1.CreateJobRequest) (*v1.CreateJobResponse, error) {
@@ -1198,6 +1270,38 @@ func (c *opsServiceClient) BuildImageStream(ctx context.Context, req *v1.BuildIm
 func (c *opsServiceClient) ImportImage(ctx context.Context, req *v1.ImportImageRequest) (*v1.ImportImageResponse, error) {
 	var res v1.ImportImageResponse
 	if err := c.client.CallUnary(ctx, opsServiceImportImageSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) CreateBuild(ctx context.Context, req *v1.CreateBuildRequest) (*v1.CreateBuildResponse, error) {
+	var res v1.CreateBuildResponse
+	if err := c.client.CallUnary(ctx, opsServiceCreateBuildSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) ListBuilds(ctx context.Context, req *v1.ListBuildsRequest) (*v1.ListBuildsResponse, error) {
+	var res v1.ListBuildsResponse
+	if err := c.client.CallUnary(ctx, opsServiceListBuildsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) GetBuild(ctx context.Context, req *v1.GetBuildRequest) (*v1.GetBuildResponse, error) {
+	var res v1.GetBuildResponse
+	if err := c.client.CallUnary(ctx, opsServiceGetBuildSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) CancelBuild(ctx context.Context, req *v1.CancelBuildRequest) (*v1.CancelBuildResponse, error) {
+	var res v1.CancelBuildResponse
+	if err := c.client.CallUnary(ctx, opsServiceCancelBuildSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1651,6 +1755,54 @@ func (h opsServiceHandler) importImage(ctx context.Context, _ connect.Spec, stre
 		return err
 	}
 	res, err := h.svc.ImportImage(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) createBuild(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateBuildRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateBuild(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) listBuilds(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListBuildsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListBuilds(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) getBuild(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetBuildRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetBuild(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) cancelBuild(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CancelBuildRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CancelBuild(ctx, &req)
 	if err != nil {
 		return err
 	}
