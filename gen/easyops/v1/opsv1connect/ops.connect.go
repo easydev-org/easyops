@@ -100,20 +100,6 @@ const (
 	OpsServiceListSecretsProcedure = "/easyops.v1.OpsService/ListSecrets"
 	// OpsServiceDeleteSecretProcedure is the procedure name of the OpsService's DeleteSecret RPC.
 	OpsServiceDeleteSecretProcedure = "/easyops.v1.OpsService/DeleteSecret"
-	// OpsServiceHelmDeployProcedure is the procedure name of the OpsService's HelmDeploy RPC.
-	OpsServiceHelmDeployProcedure = "/easyops.v1.OpsService/HelmDeploy"
-	// OpsServiceHelmListProcedure is the procedure name of the OpsService's HelmList RPC.
-	OpsServiceHelmListProcedure = "/easyops.v1.OpsService/HelmList"
-	// OpsServiceHelmHistoryProcedure is the procedure name of the OpsService's HelmHistory RPC.
-	OpsServiceHelmHistoryProcedure = "/easyops.v1.OpsService/HelmHistory"
-	// OpsServiceHelmRollbackProcedure is the procedure name of the OpsService's HelmRollback RPC.
-	OpsServiceHelmRollbackProcedure = "/easyops.v1.OpsService/HelmRollback"
-	// OpsServiceHelmUninstallProcedure is the procedure name of the OpsService's HelmUninstall RPC.
-	OpsServiceHelmUninstallProcedure = "/easyops.v1.OpsService/HelmUninstall"
-	// OpsServiceHelmObjectsProcedure is the procedure name of the OpsService's HelmObjects RPC.
-	OpsServiceHelmObjectsProcedure = "/easyops.v1.OpsService/HelmObjects"
-	// OpsServiceHelmObjectLogsProcedure is the procedure name of the OpsService's HelmObjectLogs RPC.
-	OpsServiceHelmObjectLogsProcedure = "/easyops.v1.OpsService/HelmObjectLogs"
 	// OpsServiceBuildImageProcedure is the procedure name of the OpsService's BuildImage RPC.
 	OpsServiceBuildImageProcedure = "/easyops.v1.OpsService/BuildImage"
 	// OpsServiceBuildImageStreamProcedure is the procedure name of the OpsService's BuildImageStream
@@ -343,55 +329,6 @@ var (
 			Procedure:  OpsServiceDeleteSecretProcedure,
 		}
 	})
-	opsServiceHelmDeploySpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmDeploy"),
-			Procedure:  OpsServiceHelmDeployProcedure,
-		}
-	})
-	opsServiceHelmListSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmList"),
-			Procedure:  OpsServiceHelmListProcedure,
-		}
-	})
-	opsServiceHelmHistorySpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmHistory"),
-			Procedure:  OpsServiceHelmHistoryProcedure,
-		}
-	})
-	opsServiceHelmRollbackSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmRollback"),
-			Procedure:  OpsServiceHelmRollbackProcedure,
-		}
-	})
-	opsServiceHelmUninstallSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmUninstall"),
-			Procedure:  OpsServiceHelmUninstallProcedure,
-		}
-	})
-	opsServiceHelmObjectsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmObjects"),
-			Procedure:  OpsServiceHelmObjectsProcedure,
-		}
-	})
-	opsServiceHelmObjectLogsSpec = sync.OnceValue(func() connect.Spec {
-		return connect.Spec{
-			StreamType: connect.StreamTypeUnary,
-			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("HelmObjectLogs"),
-			Procedure:  OpsServiceHelmObjectLogsProcedure,
-		}
-	})
 	opsServiceBuildImageSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeUnary,
@@ -459,14 +396,6 @@ type OpsServiceClient interface {
 	GetSecret(context.Context, *v1.GetSecretRequest) (*v1.GetSecretResponse, error)
 	ListSecrets(context.Context, *v1.ListSecretsRequest) (*v1.ListSecretsResponse, error)
 	DeleteSecret(context.Context, *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error)
-	// ---- helm ----
-	HelmDeploy(context.Context, *v1.HelmDeployRequest) (*v1.HelmDeployResponse, error)
-	HelmList(context.Context, *v1.HelmListRequest) (*v1.HelmListResponse, error)
-	HelmHistory(context.Context, *v1.HelmHistoryRequest) (*v1.HelmHistoryResponse, error)
-	HelmRollback(context.Context, *v1.HelmRollbackRequest) (*v1.HelmRollbackResponse, error)
-	HelmUninstall(context.Context, *v1.HelmUninstallRequest) (*v1.HelmUninstallResponse, error)
-	HelmObjects(context.Context, *v1.HelmObjectsRequest) (*v1.HelmObjectsResponse, error)
-	HelmObjectLogs(context.Context, *v1.HelmObjectLogsRequest) (*v1.HelmObjectLogsResponse, error)
 	// ---- image build / import ----
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest) (OpsServiceBuildImageStreamClientStream, error)
@@ -602,14 +531,6 @@ type OpsServiceHandler interface {
 	GetSecret(context.Context, *v1.GetSecretRequest) (*v1.GetSecretResponse, error)
 	ListSecrets(context.Context, *v1.ListSecretsRequest) (*v1.ListSecretsResponse, error)
 	DeleteSecret(context.Context, *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error)
-	// ---- helm ----
-	HelmDeploy(context.Context, *v1.HelmDeployRequest) (*v1.HelmDeployResponse, error)
-	HelmList(context.Context, *v1.HelmListRequest) (*v1.HelmListResponse, error)
-	HelmHistory(context.Context, *v1.HelmHistoryRequest) (*v1.HelmHistoryResponse, error)
-	HelmRollback(context.Context, *v1.HelmRollbackRequest) (*v1.HelmRollbackResponse, error)
-	HelmUninstall(context.Context, *v1.HelmUninstallRequest) (*v1.HelmUninstallResponse, error)
-	HelmObjects(context.Context, *v1.HelmObjectsRequest) (*v1.HelmObjectsResponse, error)
-	HelmObjectLogs(context.Context, *v1.HelmObjectLogsRequest) (*v1.HelmObjectLogsResponse, error)
 	// ---- image build / import ----
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest, OpsServiceBuildImageStreamServerStream) error
@@ -653,13 +574,6 @@ func RegisterOpsServiceHandler(server *connect.Server, svc OpsServiceHandler) {
 		connect.Method{Spec: opsServiceGetSecretSpec(), Handler: adapter.getSecret},
 		connect.Method{Spec: opsServiceListSecretsSpec(), Handler: adapter.listSecrets},
 		connect.Method{Spec: opsServiceDeleteSecretSpec(), Handler: adapter.deleteSecret},
-		connect.Method{Spec: opsServiceHelmDeploySpec(), Handler: adapter.helmDeploy},
-		connect.Method{Spec: opsServiceHelmListSpec(), Handler: adapter.helmList},
-		connect.Method{Spec: opsServiceHelmHistorySpec(), Handler: adapter.helmHistory},
-		connect.Method{Spec: opsServiceHelmRollbackSpec(), Handler: adapter.helmRollback},
-		connect.Method{Spec: opsServiceHelmUninstallSpec(), Handler: adapter.helmUninstall},
-		connect.Method{Spec: opsServiceHelmObjectsSpec(), Handler: adapter.helmObjects},
-		connect.Method{Spec: opsServiceHelmObjectLogsSpec(), Handler: adapter.helmObjectLogs},
 		connect.Method{Spec: opsServiceBuildImageSpec(), Handler: adapter.buildImage},
 		connect.Method{Spec: opsServiceBuildImageStreamSpec(), Handler: adapter.buildImageStream},
 		connect.Method{Spec: opsServiceImportImageSpec(), Handler: adapter.importImage},
@@ -856,34 +770,6 @@ func (UnimplementedOpsServiceHandler) ListSecrets(context.Context, *v1.ListSecre
 
 func (UnimplementedOpsServiceHandler) DeleteSecret(context.Context, *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.DeleteSecret is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmDeploy(context.Context, *v1.HelmDeployRequest) (*v1.HelmDeployResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmDeploy is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmList(context.Context, *v1.HelmListRequest) (*v1.HelmListResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmList is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmHistory(context.Context, *v1.HelmHistoryRequest) (*v1.HelmHistoryResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmHistory is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmRollback(context.Context, *v1.HelmRollbackRequest) (*v1.HelmRollbackResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmRollback is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmUninstall(context.Context, *v1.HelmUninstallRequest) (*v1.HelmUninstallResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmUninstall is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmObjects(context.Context, *v1.HelmObjectsRequest) (*v1.HelmObjectsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmObjects is not implemented")
-}
-
-func (UnimplementedOpsServiceHandler) HelmObjectLogs(context.Context, *v1.HelmObjectLogsRequest) (*v1.HelmObjectLogsResponse, error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.HelmObjectLogs is not implemented")
 }
 
 func (UnimplementedOpsServiceHandler) BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error) {
@@ -1149,62 +1035,6 @@ func (c *opsServiceClient) ListSecrets(ctx context.Context, req *v1.ListSecretsR
 func (c *opsServiceClient) DeleteSecret(ctx context.Context, req *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error) {
 	var res v1.DeleteSecretResponse
 	if err := c.client.CallUnary(ctx, opsServiceDeleteSecretSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmDeploy(ctx context.Context, req *v1.HelmDeployRequest) (*v1.HelmDeployResponse, error) {
-	var res v1.HelmDeployResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmDeploySpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmList(ctx context.Context, req *v1.HelmListRequest) (*v1.HelmListResponse, error) {
-	var res v1.HelmListResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmListSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmHistory(ctx context.Context, req *v1.HelmHistoryRequest) (*v1.HelmHistoryResponse, error) {
-	var res v1.HelmHistoryResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmHistorySpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmRollback(ctx context.Context, req *v1.HelmRollbackRequest) (*v1.HelmRollbackResponse, error) {
-	var res v1.HelmRollbackResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmRollbackSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmUninstall(ctx context.Context, req *v1.HelmUninstallRequest) (*v1.HelmUninstallResponse, error) {
-	var res v1.HelmUninstallResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmUninstallSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmObjects(ctx context.Context, req *v1.HelmObjectsRequest) (*v1.HelmObjectsResponse, error) {
-	var res v1.HelmObjectsResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmObjectsSpec(), req, &res); err != nil {
-		return nil, err
-	}
-	return &res, nil
-}
-
-func (c *opsServiceClient) HelmObjectLogs(ctx context.Context, req *v1.HelmObjectLogsRequest) (*v1.HelmObjectLogsResponse, error) {
-	var res v1.HelmObjectLogsResponse
-	if err := c.client.CallUnary(ctx, opsServiceHelmObjectLogsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1602,90 +1432,6 @@ func (h opsServiceHandler) deleteSecret(ctx context.Context, _ connect.Spec, str
 		return err
 	}
 	res, err := h.svc.DeleteSecret(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmDeploy(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmDeployRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmDeploy(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmList(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmListRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmList(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmHistory(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmHistoryRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmHistory(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmRollback(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmRollbackRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmRollback(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmUninstall(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmUninstallRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmUninstall(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmObjects(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmObjectsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmObjects(ctx, &req)
-	if err != nil {
-		return err
-	}
-	return stream.Send(res)
-}
-
-func (h opsServiceHandler) helmObjectLogs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
-	var req v1.HelmObjectLogsRequest
-	if err := stream.Receive(&req); err != nil {
-		return err
-	}
-	res, err := h.svc.HelmObjectLogs(ctx, &req)
 	if err != nil {
 		return err
 	}

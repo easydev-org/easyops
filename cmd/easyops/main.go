@@ -1,5 +1,5 @@
 // Command easyops is the easyops ops SERVER: it exposes the ops library
-// (sandbox/service/helm/image lifecycle) as the Connect service
+// (sandbox/service/image lifecycle) as the Connect service
 // easyops.v1.OpsService over the cluster network.
 //
 // It is the ONLY easyops component that needs Kubernetes permissions. The
@@ -32,7 +32,6 @@ import (
 	"github.com/easy-platform/easyops/internal/platform/obs"
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/helmmgr"
 	"github.com/easy-platform/easyops/internal/imagebuild"
 	"github.com/easy-platform/easyops/internal/k8scheck"
 	"github.com/easy-platform/easyops/internal/k8sconfig"
@@ -113,7 +112,6 @@ func main() {
 		CPULimit:      os.Getenv("SANDBOX_CPU_LIMIT"),
 		MemoryRequest: os.Getenv("SANDBOX_MEMORY_REQUEST"),
 		MemoryLimit:   os.Getenv("SANDBOX_MEMORY_LIMIT"),
-		RestartPolicy: os.Getenv("SANDBOX_RESTART_POLICY"),
 	})
 	if err != nil {
 		log.Fatalf("sandbox backend: %v", err)
@@ -139,18 +137,12 @@ func main() {
 	if services == nil {
 		log.Printf("warn: services backend is NIL: PVC/service RPCs are unavailable and golden_disk cannot create its shared cache PVC")
 	}
-	helm, err := helmmgr.New(helmmgr.Config{Namespace: sandboxNS})
-	if err != nil {
-		log.Printf("warn: helm backend unavailable: %v", err)
-		helm = nil
-	}
 	builder := newImageBuilder()
 	svc := opssvc.New(opssvc.Deps{
 		Sandbox:             sbx,
 		Runtime:             runtime,
 		DefaultSandboxImage: os.Getenv("DEFAULT_SANDBOX_IMAGE"),
 		Services:            services,
-		Helm:                helm,
 		Builder:             builder,
 		PVCStorageClass:     os.Getenv("PVC_STORAGE_CLASS"),
 		PVCDefaultSize:      envOr("PVC_DEFAULT_SIZE", "1Gi"),
@@ -206,8 +198,8 @@ func main() {
 		Protocols:         protocols,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("easyops listening on %s (sandbox-ns=%s services=%v helm=%v image=%v)",
-		listen, sandboxNS, services != nil, helm != nil, builder != nil)
+	log.Printf("easyops listening on %s (sandbox-ns=%s services=%v image=%v)",
+		listen, sandboxNS, services != nil, builder != nil)
 
 	// Prometheus /metrics on a SEPARATE port (METRICS_PORT, default 9090) so it
 	// never contends with the OpsService/healthz mux on PORT.

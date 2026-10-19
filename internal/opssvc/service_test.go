@@ -129,12 +129,6 @@ func TestUnconfiguredBackendsReturnUnavailable(t *testing.T) {
 	if _, err := s.CreatePVC(ctx, &opsv1.CreatePVCRequest{Owner: "a", Name: "p"}); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("CreatePVC: code = %v, want Unavailable", connect.CodeOf(err))
 	}
-	if _, err := s.HelmList(ctx, &opsv1.HelmListRequest{Owner: "a"}); err != nil {
-		t.Fatalf("HelmList on nil backend should be an empty list, got %v", err)
-	}
-	if _, err := s.HelmHistory(ctx, &opsv1.HelmHistoryRequest{Owner: "a", Release: "r"}); connect.CodeOf(err) != connect.CodeUnavailable {
-		t.Fatalf("HelmHistory: code = %v, want Unavailable", connect.CodeOf(err))
-	}
 	if _, err := s.BuildImage(ctx, &opsv1.BuildImageRequest{Owner: "a", Repo: "o/i", Tag: "t"}); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("BuildImage: code = %v, want Unavailable", connect.CodeOf(err))
 	}

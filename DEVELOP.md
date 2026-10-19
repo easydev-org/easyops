@@ -1,6 +1,6 @@
 # DEVELOP — 开发规范（easyops）
 
-本仓是 `easy-vcs/agent-gateway` 中 K8s/BuildKit/Helm 运维能力的抽取，并升级为
+本仓是 `easy-vcs/agent-gateway` 中 K8s/BuildKit 运维能力的抽取，并升级为
 **「库 + 服务」两层**（与 easyvcs / artifact 并列的第三个 server）。遵循 easy-vcs
 org 的开发基准（见 `easy-vcs/easyvcs@main` 的 `DEVELOP.md`）以及 `agent-gateway`
 的 `DEVELOP.md`。**不得放宽** org 基准的硬性规定。
@@ -18,7 +18,7 @@ org 的开发基准（见 `easy-vcs/easyvcs@main` 的 `DEVELOP.md`）以及 `age
 ## 2. 两层结构与依赖规则（硬性）
 
 - **库层**：`internal/*`（`runtimeprofiles`/`sandboxmgr`/`servicesmgr`/`k8swatch`/
-  `k8scheck`/`imagebuild`/`helmmgr`/`sandboxreaper`/…）。纯 Go 库，**不得** import
+  `k8scheck`/`imagebuild`/`sandboxreaper`/…）。纯 Go 库，**不得** import
   `connectrpc`，也不得 import 业务包。
 - **服务层**：`cmd/easyops` + `gen/easyops/v1` + 服务适配层 `internal/opssvc`。
   **只有这三个位置**允许 import `connectrpc` / protobuf 生成物。
@@ -55,7 +55,6 @@ org 的开发基准（见 `easy-vcs/easyvcs@main` 的 `DEVELOP.md`）以及 `age
 | `internal/servicesmgr/*`（16 文件） | 同名 | `services.go`/`preflight.go` 仅改 import path；其余逐字节 |
 | `internal/k8swatch/*` | 同名 | 逐字节迁移 |
 | `internal/imagebuild/*` | 同名 | 逐字节迁移（Phase 3） |
-| `internal/helmmgr/*` | 同名 | 逐字节迁移（Phase 3） |
 | `internal/sandboxreaper/*` | 同名 | Phase 4；`Job` 本地化 + `WorkerLister` 接口注入（见 §5.2），逻辑等价 |
 
 全部 ≤500 行；`gofmt -l .` 为空，`go build/vet/test` 全绿。
@@ -64,8 +63,8 @@ org 的开发基准（见 `easy-vcs/easyvcs@main` 的 `DEVELOP.md`）以及 `age
 
 Phase 1 任务书原写「只迁 `sandboxmgr` 与 `runtimeprofiles`」，但 `sandboxmgr` 的
 `preflight.go` import 了 `internal/k8scheck`，不迁则编译不过，故把 `k8scheck` 作为
-**最小依赖闭包**一并迁入。Phase 2/3 的 `servicesmgr`、`imagebuild`、`helmmgr` 无
-新增仓外依赖（`helmmgr` 引入 `helm.sh/helm/v3`）。
+**最小依赖闭包**一并迁入。`servicesmgr`、`imagebuild` 无新增仓外依赖。
+（Helm release 管理已于后续版本**移除**。）
 
 Phase 4 的 `sandboxreaper` 依赖 `internal/sandboxmgr`（已在本仓）与
 `internal/workerclient`。**`workerclient` 不干净**：它 import `connectrpc` 与生成的
@@ -83,23 +82,23 @@ Phase 4 的 `sandboxreaper` 依赖 `internal/sandboxmgr`（已在本仓）与
 
 | 路径 | 说明 |
 |---|---|
-| `proto/easyops/v1/ops.proto` | `easyops.v1.OpsService` 契约（sandbox / services / pvc / helm / image / live） |
+| `proto/easyops/v1/ops.proto` | `easyops.v1.OpsService` 契约（sandbox / services / pvc / image / live） |
 | `proto/buf.yaml` / `proto/buf.gen.easyops.yaml` | buf 配置（local 插件，离线可复现） |
 | `scripts/gen-proto.sh` | 重新生成 `gen/easyops/v1`（生成物入库） |
 | `gen/easyops/v1/**` | 生成的 pb + Connect 绑定 |
-| `internal/opssvc/{service,sandbox,watch,services,pvc,helm,image,convert,workerclient,auth}.go` | 服务适配层：RPC↔库、owner 打标/过滤、服务令牌校验、参数校验；**不含策略**。每个 backend 可缺省（对应 RPC 返回 `CodeUnavailable`）。`watch.go` 把 sandbox/service/PVC 三类 watch 源汇聚成一条 `WatchWorkspace` 流，逐帧置位 `*_changed` |
-| `internal/opssvc/{service,sandbox,watch,services,pvc,helm,image,convert,workerclient,auth,errs}.go` | 服务适配层：RPC↔库、owner 打标/过滤、服务令牌校验、参数校验；**不含策略**。每个 backend 可缺省（对应 RPC 返回 `CodeUnavailable`）。`watch.go` 把 sandbox/service/PVC 三类 watch 源汇聚成一条 `WatchWorkspace` 流，逐帧置位 `*_changed`。`errs.go` 的 `mapK8sErr` 把 k8s 后端错误映射为语义化 Connect code（见 §5.5） |
-| `cmd/easyops/main.go` | 服务进程：按 env 构造 backend（sandbox/services/helm/image）+ idle reaper + `OpsService` + `/healthz` + `/readyz` |
+| `internal/opssvc/{service,sandbox,watch,services,pvc,image,convert,workerclient,auth}.go` | 服务适配层：RPC↔库、owner 打标/过滤、服务令牌校验、参数校验；**不含策略**。每个 backend 可缺省（对应 RPC 返回 `CodeUnavailable`）。`watch.go` 把 sandbox/service/PVC 三类 watch 源汇聚成一条 `WatchWorkspace` 流，逐帧置位 `*_changed` |
+| `internal/opssvc/{service,sandbox,watch,services,pvc,image,convert,workerclient,auth,errs}.go` | 服务适配层：RPC↔库、owner 打标/过滤、服务令牌校验、参数校验；**不含策略**。每个 backend 可缺省（对应 RPC 返回 `CodeUnavailable`）。`watch.go` 把 sandbox/service/PVC 三类 watch 源汇聚成一条 `WatchWorkspace` 流，逐帧置位 `*_changed`。`errs.go` 的 `mapK8sErr` 把 k8s 后端错误映射为语义化 Connect code（见 §5.5） |
+| `cmd/easyops/main.go` | 服务进程：按 env 构造 backend（sandbox/services/image）+ idle reaper + `OpsService` + `/healthz` + `/readyz` |
 | `internal/opssvc/sandbox_logs.go` | `SandboxLogs`/`WatchSandboxLogs`：owner 作用域的沙箱容器日志（沙箱由 easyops 创建，只有 easyops 的 SA 能读其 pod）；无输出时回填 pod 诊断 + k8s events（events 为 best-effort，缺 `events` 读权限则省略） |
 | `Dockerfile` / `build-image.sh` | 服务镜像 |
 | （平台清单） | **不在本仓**：Deployment/Service/Secret、SA + worker-ns Role/RoleBinding 已迁 **`easy-vcs/deploy`**（chart `easyvcs-platform`，见 `templates/easyops.yaml`、`templates/rbac.yaml`） |
 
-helm / image RPC 的 repo tarball 由**请求携带**（`archive` bytes），easyops 不访问 VCS。
+image RPC 的 repo tarball 由**请求携带**（`archive` bytes），easyops 不访问 VCS。
 
 ### 5.4 依赖
 
 `go.mod`：库层用 `k8s.io/api|apimachinery|client-go`、`sigs.k8s.io/yaml`、
-`helm.sh/helm/v3`（helmmgr）；服务层加 `connectrpc.com/connect`、
+服务层加 `connectrpc.com/connect`、
 `google.golang.org/protobuf`。**不**带入 sqlite / nats / abc-protocol /
 agent-gateway。由 `go mod tidy` 生成。
 
@@ -144,9 +143,6 @@ OpsService 方法签名）：
   `WatchServiceLogs` 在容器**无输出**时附带 pod 诊断（`ServiceLogsResponse` 新增
   `pod_phase`/`restarts`/`message`/`available`；`WatchServiceLogsResponse` 终帧新增
   `pod_phase`/`restarts`/`message`）。
-- **`WatchWorkspace` 流式 Helm releases**：帧新增 `helm_releases`=8 /
-  `helm_releases_changed`=9（只增字段，1..7 不变；帧仍自包含；helm backend 缺省时列表
-  空、位 false）。watch 源为 `helmmgr.WatchReleases`（release 状态 ConfigMap）。
 - **`ListPVCs` 只读全量**：`ListPVCs` 不再按 owner 过滤（PVC 为只读共享视图）；`GetPVC`/
   `CreatePVC`/`DeletePVC` 与其它资源仍按 owner 过滤。
 
@@ -159,7 +155,7 @@ go list -deps ./... | grep -Ei \
 
 # connectrpc 是否泄漏进库包？（应无输出）
 go list -deps ./internal/runtimeprofiles ./internal/sandboxmgr ./internal/servicesmgr \
-  ./internal/k8swatch ./internal/k8scheck ./internal/imagebuild ./internal/helmmgr \
+  ./internal/k8swatch ./internal/k8scheck ./internal/imagebuild \
   ./internal/sandboxreaper | grep connectrpc
 ```
 

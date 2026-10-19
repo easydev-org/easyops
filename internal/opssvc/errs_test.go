@@ -74,7 +74,7 @@ func TestListRPCsMapForbiddenToPermissionDenied(t *testing.T) {
 	ctx := context.Background()
 
 	// sandboxes: pods list forbidden.
-	sbx := sandboxmgr.NewWithClientset(forbiddenClientset("pods"), sandboxmgr.Config{Namespace: "worker"})
+	sbx := sandboxmgr.NewWithClientset(forbiddenClientset("deployments"), sandboxmgr.Config{Namespace: "worker"})
 	s := New(Deps{Sandbox: sbx, Runtime: runtimeprofiles.DefaultSettings()})
 	if _, err := s.ListSandboxes(ctx, &opsv1.ListSandboxesRequest{Owner: "a"}); connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("ListSandboxes: code = %v, want PermissionDenied", connect.CodeOf(err))
@@ -99,7 +99,7 @@ func TestListRPCsMapForbiddenToPermissionDenied(t *testing.T) {
 // CodeInternal must not come back for a permission error.
 func TestForbiddenIsNotInternal(t *testing.T) {
 	ctx := context.Background()
-	sbx := sandboxmgr.NewWithClientset(forbiddenClientset("pods"), sandboxmgr.Config{Namespace: "worker"})
+	sbx := sandboxmgr.NewWithClientset(forbiddenClientset("deployments"), sandboxmgr.Config{Namespace: "worker"})
 	s := New(Deps{Sandbox: sbx, Runtime: runtimeprofiles.DefaultSettings()})
 	_, err := s.ListSandboxes(ctx, &opsv1.ListSandboxesRequest{Owner: "a"})
 	if connect.CodeOf(err) == connect.CodeInternal {

@@ -42,7 +42,7 @@ func TestBuildWatchFrameSnapshotAllKinds(t *testing.T) {
 	seed(t, s, "alice")
 	seed(t, s, "bob")
 
-	frame := s.buildWatchFrame(context.Background(), "alice", true, true, true, true, false)
+	frame := s.buildWatchFrame(context.Background(), "alice", true, true, true, true)
 	if !frame.GetSnapshot() || !frame.GetSandboxesChanged() || !frame.GetServicesChanged() || !frame.GetPvcsChanged() {
 		t.Fatalf("snapshot/changed flags wrong: %+v", frame)
 	}
@@ -63,7 +63,7 @@ func TestBuildWatchFrameEmptyOwnerNoFilter(t *testing.T) {
 	seed(t, s, "alice")
 	seed(t, s, "bob")
 
-	frame := s.buildWatchFrame(context.Background(), "", true, true, true, true, false)
+	frame := s.buildWatchFrame(context.Background(), "", true, true, true, true)
 	if len(frame.GetSandboxes()) != 2 || len(frame.GetServices()) != 2 || len(frame.GetPvcs()) != 2 {
 		t.Fatalf("empty owner should not filter: sb=%d svc=%d pvc=%d",
 			len(frame.GetSandboxes()), len(frame.GetServices()), len(frame.GetPvcs()))
@@ -79,7 +79,7 @@ func TestBuildWatchFrameSelfContained(t *testing.T) {
 
 	// A services-changed frame: all three lists are still present, but only
 	// ServicesChanged is set.
-	frame := s.buildWatchFrame(context.Background(), "alice", false, false, true, false, false)
+	frame := s.buildWatchFrame(context.Background(), "alice", false, false, true, false)
 	if frame.GetSnapshot() || frame.GetSandboxesChanged() || !frame.GetServicesChanged() || frame.GetPvcsChanged() {
 		t.Fatalf("changed flags wrong: %+v", frame)
 	}
@@ -90,7 +90,7 @@ func TestBuildWatchFrameSelfContained(t *testing.T) {
 
 	// A sandbox-changed frame: same — all three lists present, only the sandbox
 	// bit set.
-	frame = s.buildWatchFrame(context.Background(), "alice", false, true, false, false, false)
+	frame = s.buildWatchFrame(context.Background(), "alice", false, true, false, false)
 	if !frame.GetSandboxesChanged() || frame.GetServicesChanged() || frame.GetPvcsChanged() {
 		t.Fatalf("sandbox frame flags wrong: %+v", frame)
 	}
@@ -109,7 +109,7 @@ func TestBuildWatchFrameNoServicesBackend(t *testing.T) {
 
 	// Mirror WatchWorkspace's snapshot call: services backend absent => its bits
 	// are false, not true.
-	frame := s.buildWatchFrame(context.Background(), "alice", true, true, false, false, false)
+	frame := s.buildWatchFrame(context.Background(), "alice", true, true, false, false)
 	if !frame.GetSnapshot() || !frame.GetSandboxesChanged() {
 		t.Fatalf("snapshot/sandbox bit wrong: %+v", frame)
 	}
@@ -118,20 +118,5 @@ func TestBuildWatchFrameNoServicesBackend(t *testing.T) {
 	}
 	if len(frame.GetServices()) != 0 || len(frame.GetPvcs()) != 0 {
 		t.Fatalf("nil services backend must yield empty services/pvcs: %+v", frame)
-	}
-}
-
-// TestBuildWatchFrameNoHelmBackend checks that with the helm backend absent the
-// helm list stays empty and its changed bit stays false.
-func TestBuildWatchFrameNoHelmBackend(t *testing.T) {
-	s := newWatchTestService() // no helm backend
-	seed(t, s, "alice")
-
-	frame := s.buildWatchFrame(context.Background(), "alice", true, true, true, true, false)
-	if frame.GetHelmReleasesChanged() {
-		t.Fatalf("absent helm backend must not flag helm as changed: %+v", frame)
-	}
-	if len(frame.GetHelmReleases()) != 0 {
-		t.Fatalf("nil helm backend must yield empty helm releases: %+v", frame.GetHelmReleases())
 	}
 }

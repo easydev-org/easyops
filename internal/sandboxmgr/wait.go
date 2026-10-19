@@ -7,7 +7,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // WaitReady polls until the sandbox's Service address accepts a TCP connection
@@ -23,8 +22,11 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 	svcAddr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", res, c.namespace, ServicePort)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		pod, err := c.cs.CoreV1().Pods(c.namespace).Get(ctx, res, metav1.GetOptions{})
-		if err == nil {
+		pod, perr := c.depPod(ctx, res)
+		if perr != nil {
+			pod = nil
+		}
+		if pod != nil {
 			// A failed pod (RestartPolicy Never) never becomes ready: surface the
 			// reason immediately instead of waiting out the whole timeout.
 			if pod.Status.Phase == "Failed" {

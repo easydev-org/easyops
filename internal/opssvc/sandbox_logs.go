@@ -2,6 +2,7 @@ package opssvc
 
 import (
 	"context"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 
@@ -27,7 +28,9 @@ func (s *Service) SandboxLogs(ctx context.Context, req *opsv1.SandboxLogsRequest
 	lines, err := s.sbx.Logs(ctx, req.GetName(), sandboxmgr.LogOptions{
 		TailLines: tail, Previous: req.GetPrevious(),
 	})
-	if err != nil {
+	// A sandbox whose pod has not started yet (or was already reaped) has no log
+	// stream: that is NOT an error — we still return the diagnostics below.
+	if err != nil && !isNoPodErr(err) {
 		return nil, mapK8sErr(err)
 	}
 	resp := &opsv1.SandboxLogsResponse{Lines: lines, Available: len(lines) > 0}
@@ -114,4 +117,10 @@ func (s *Service) sandboxDiagnostics(ctx context.Context, name string) sandboxDi
 		lastStateReason:  sb.LastStateReason,
 		events:           s.sbx.Events(ctx, name, 20),
 	}
+}
+
+// isNoPodErr reports whether err means "the sandbox has no pod yet" (a benign
+// state for a still-rolling-out Deployment), as opposed to a real backend error.
+func isNoPodErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no pod yet")
 }

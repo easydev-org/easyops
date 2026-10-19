@@ -126,11 +126,7 @@ message WatchWorkspaceResponse {
   bool sandboxes_changed = 5;
   bool services_changed  = 6;
   bool pvcs_changed      = 7;
-  // helm_releases are the owner's Helm releases (empty when the helm backend is
-  // not configured). The list mirrors HelmList (a slot release is surfaced via
-  // its router entry's Slots, never as its own row).
-  repeated HelmReleaseInfo helm_releases = 8;
-  bool helm_releases_changed = 9;
+  reserved 8, 9; // was helm_releases / helm_releases_changed (Helm removed)
 }
 
 // ---- shared service/PVC value types ----
@@ -582,130 +578,6 @@ message ListSecretsResponse { repeated Secret secrets = 1; }
 message DeleteSecretRequest { string name = 1; string owner = 2; }
 message DeleteSecretResponse { bool deleted = 1; }
 
-// ---- Helm ----
-
-message HelmReleaseInfo {
-  string name = 1;
-  string namespace = 2;
-  string owner = 3;   // owning tenant (opaque; NOT validated)
-  string session = 4;
-  string ref = 5;
-  string chart_path = 6;
-  int32 revision = 7;
-  string status = 8; // deployed | failed
-  int64 updated_at = 9;
-  reserved 10, 11, 12, 13; // was blue-green (slot/router/active_slot/slots)
-  // Chart/app version + applied objects of the CURRENT revision, so a release
-  // LIST view can show them without a separate HelmHistory call.
-  string chart_version = 14; // Chart.yaml `version` at the current revision
-  string app_version = 15;   // Chart.yaml `appVersion` (may be empty)
-  repeated string objects = 16; // "Kind/name" the current revision deployed
-  // org_namespace is the tenant-internal namespace (see ServiceInfo.namespace);
-  // distinct from the K8s `namespace` above.
-  string org_namespace = 17;
-}
-
-message HelmRevisionInfo {
-  int32 revision = 1;
-  string ref = 2;
-  string chart_path = 3;
-  string values = 4;
-  int64 created_at = 5;
-  repeated string objects = 6; // "Kind/name"
-}
-
-// HelmObjectInfo is the live status of one object a release deployed.
-message HelmObjectInfo {
-  string kind = 1;
-  string name = 2;
-  string namespace = 3;
-  // status is a coarse phase: Ready | Progressing | Failed | Complete |
-  // NotFound | <Pod phase> (Pending/Running/Succeeded/Failed).
-  string status = 4;
-  bool ready = 5;
-  // message is the first unhealthy container's waiting/terminated reason (e.g.
-  // CrashLoopBackOff), or the lookup error. Empty when healthy.
-  string message = 6;
-  // Pod/workload diagnostics (best-effort; zero when not applicable).
-  string phase = 7; // Pod phase
-  int32 restarts = 8;
-  int32 ready_replicas = 9;
-  int32 desired_replicas = 10;
-}
-
-message HelmObjectsRequest {
-  string owner = 1;
-  string release = 2;
-}
-message HelmObjectsResponse {
-  repeated HelmObjectInfo objects = 1;
-}
-
-message HelmObjectLogsRequest {
-  string owner = 1;
-  string release = 2;
-  string kind = 3; // must be "Pod"
-  string name = 4;
-  int64 tail_lines = 5;
-  bool previous = 6;
-  string container = 7; // "" = the pod's first container
-}
-message HelmObjectLogsResponse {
-  repeated string lines = 1;
-  bool available = 2;
-  string message = 3; // diagnostics when there is no log output (best-effort)
-}
-
-message HelmDeployRequest {
-  string owner = 1;
-  string release = 2;
-  string org = 3;
-  string repo = 4;
-  string ref = 5;
-  string chart_path = 6;
-  string values = 7;
-  bool dry_run = 8;
-  reserved 9; // was blue-green slot; blue-green was removed.
-  // session optionally binds the release to a session (opaque; may be empty).
-  string session = 10;
-  // archive is the repo tarball (tar.gz) to render the chart from. The caller
-  // (gateway) fetches it from the VCS and passes the bytes so easyops needs no
-  // VCS access.
-  bytes archive = 11;
-  // namespace is the caller's tenant-internal namespace (see DeployServiceRequest).
-  string namespace = 12;
-}
-message HelmDeployResponse {
-  HelmReleaseInfo release = 1;
-  string manifest = 2;
-  repeated string objects = 3;
-}
-
-message HelmListRequest { string owner = 1; }
-message HelmListResponse { repeated HelmReleaseInfo releases = 1; }
-
-message HelmHistoryRequest {
-  string owner = 1;
-  string release = 2;
-}
-message HelmHistoryResponse {
-  HelmReleaseInfo release = 1;
-  repeated HelmRevisionInfo revisions = 2;
-}
-
-message HelmRollbackRequest {
-  string owner = 1;
-  string release = 2;
-  int32 revision = 3; // 0 = the previous revision
-}
-message HelmRollbackResponse { HelmReleaseInfo release = 1; }
-
-message HelmUninstallRequest {
-  string owner = 1;
-  string release = 2;
-}
-message HelmUninstallResponse { bool deleted = 1; }
-
 // ---- image build / import ----
 
 // BuildImage builds an image from a repo Dockerfile via buildkit and pushes it
@@ -795,15 +667,6 @@ service OpsService {
   rpc GetSecret(GetSecretRequest) returns (GetSecretResponse);
   rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
   rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse);
-
-  // ---- helm ----
-  rpc HelmDeploy(HelmDeployRequest) returns (HelmDeployResponse);
-  rpc HelmList(HelmListRequest) returns (HelmListResponse);
-  rpc HelmHistory(HelmHistoryRequest) returns (HelmHistoryResponse);
-  rpc HelmRollback(HelmRollbackRequest) returns (HelmRollbackResponse);
-  rpc HelmUninstall(HelmUninstallRequest) returns (HelmUninstallResponse);
-  rpc HelmObjects(HelmObjectsRequest) returns (HelmObjectsResponse);
-  rpc HelmObjectLogs(HelmObjectLogsRequest) returns (HelmObjectLogsResponse);
 
   // ---- image build / import ----
   rpc BuildImage(BuildImageRequest) returns (BuildImageResponse);

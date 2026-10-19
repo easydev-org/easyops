@@ -1,6 +1,6 @@
 // Package opssvc is the easyops SERVICE ADAPTER layer: it maps the Connect
 // easyops.v1.OpsService RPCs onto the ops library packages (sandboxmgr,
-// servicesmgr, helmmgr, imagebuild).
+// servicesmgr, imagebuild).
 //
 // It is the ONLY library-adjacent package allowed to import connectrpc (see
 // DEVELOP.md §2). It holds NO policy: it validates parameters, enforces the
@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/helmmgr"
 	"github.com/easy-platform/easyops/internal/imagebuild"
 	"github.com/easy-platform/easyops/internal/k8scheck"
 	"github.com/easy-platform/easyops/internal/runtimeprofiles"
@@ -37,7 +36,6 @@ type Service struct {
 	defaultImage string
 
 	services *servicesmgr.Client
-	helm     *helmmgr.Client
 	builder  *imagebuild.Builder
 
 	pvcStorageClass string
@@ -77,8 +75,6 @@ type Deps struct {
 	DefaultSandboxImage string
 	// Services is the long-lived-service + PVC backend (nil = unavailable).
 	Services *servicesmgr.Client
-	// Helm is the Helm release backend (nil = unavailable).
-	Helm *helmmgr.Client
 	// Builder is the image build/import backend (nil = unavailable).
 	Builder *imagebuild.Builder
 	// PVCStorageClass is the deployment's storage class for CreatePVC (empty =
@@ -125,7 +121,6 @@ func New(d Deps) *Service {
 		runtime:                d.Runtime,
 		defaultImage:           d.DefaultSandboxImage,
 		services:               d.Services,
-		helm:                   d.Helm,
 		builder:                d.Builder,
 		pvcStorageClass:        d.PVCStorageClass,
 		pvcDefaultSize:         d.PVCDefaultSize,

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -115,7 +116,6 @@ type Client struct {
 	cs        kubernetes.Interface
 	namespace string
 	res       resources
-	restart   corev1.RestartPolicy
 }
 
 // resources holds the deployment's default sandbox request/limit values.
@@ -142,11 +142,6 @@ type Config struct {
 	CPULimit      string
 	MemoryRequest string
 	MemoryLimit   string
-	// RestartPolicy is the sandbox Pod's restart policy. Defaults to `Never`:
-	// a sandbox that exits (OOMKilled / crash) stays `Failed` with a readable
-	// reason instead of silently restarting, so callers see the failure. Set to
-	// `Always` to restore self-healing.
-	RestartPolicy string
 }
 
 // New builds a client from the shared REST config (see internal/k8sconfig):
@@ -170,12 +165,8 @@ func NewWithClientset(cs kubernetes.Interface, cfg Config) *Client {
 	if ns == "" {
 		ns = "worker"
 	}
-	rp := corev1.RestartPolicy(cfg.RestartPolicy)
-	if rp == "" {
-		rp = corev1.RestartPolicyNever
-	}
 	return &Client{
-		cs: cs, namespace: ns, restart: rp,
+		cs: cs, namespace: ns,
 		res: resources{
 			cpuReq: cfg.CPURequest, cpuLim: cfg.CPULimit,
 			memReq: cfg.MemoryRequest, memLim: cfg.MemoryLimit,
@@ -311,7 +302,9 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 		ImagePullPolicy: corev1.PullAlways,
 	}
 	podSpec := corev1.PodSpec{
-		RestartPolicy: c.restart,
+		// A Deployment's pod template requires Always; the worker is a long-lived
+		// server, and a crash is still surfaced via restart count + lastState.
+		RestartPolicy: corev1.RestartPolicyAlways,
 		Containers:    []corev1.Container{container},
 	}
 	if s.Runtime.RuntimeClass != "" {
@@ -361,18 +354,31 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 			})
 		}
 	}
-	pod := &corev1.Pod{
+	// A sandbox is a LONG-LIVED single-replica workload, so it is a Deployment
+	// (never a bare Pod): the Deployment owns the pod, gives it a stable
+	// identity, and self-heals a transient crash (a persistent failure is still
+	// visible via the pod's restart count + lastState). A bare Pod is NOT
+	// allowed anywhere in easyops.
+	replicas := int32(1)
+	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: res, Namespace: c.namespace, Labels: labels, Annotations: annotations,
 		},
-		Spec: podSpec,
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: annotations},
+				Spec:       podSpec,
+			},
+		},
 	}
-	if _, err := c.cs.CoreV1().Pods(c.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+	if _, err := c.cs.AppsV1().Deployments(c.namespace).Create(ctx, dep, metav1.CreateOptions{}); err != nil {
 		_ = c.cs.CoreV1().Secrets(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			return Sandbox{}, "", fmt.Errorf("%w: %s", ErrExists, s.Name)
 		}
-		return Sandbox{}, "", fmt.Errorf("create pod: %w", err)
+		return Sandbox{}, "", fmt.Errorf("create deployment: %w", err)
 	}
 
 	svc := &corev1.Service{
@@ -385,7 +391,7 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 		},
 	}
 	if _, err := c.cs.CoreV1().Services(c.namespace).Create(ctx, svc, metav1.CreateOptions{}); err != nil {
-		_ = c.cs.CoreV1().Pods(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
+		_ = c.cs.AppsV1().Deployments(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
 		_ = c.cs.CoreV1().Secrets(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			return Sandbox{}, "", fmt.Errorf("%w: %s", ErrExists, s.Name)
@@ -404,27 +410,89 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 // Get returns one sandbox by logical name.
 func (c *Client) Get(ctx context.Context, name string) (Sandbox, bool, error) {
 	res := resourceName(name)
-	pod, err := c.cs.CoreV1().Pods(c.namespace).Get(ctx, res, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return Sandbox{}, false, nil
-	}
+	// The sandbox is a Deployment; read its OWNED pod (created by the
+	// Deployment's ReplicaSet).
+	pod, err := c.depPod(ctx, res)
 	if err != nil {
 		return Sandbox{}, false, err
 	}
-	return toSandbox(c, pod), true, nil
+	if pod != nil {
+		return toSandbox(c, pod), true, nil
+	}
+	// No pod yet (still rolling out, or already reaped): fall back to the
+	// Deployment's own metadata so owner/image/session are still reported.
+	dep, derr := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, res, metav1.GetOptions{})
+	if apierrors.IsNotFound(derr) {
+		return Sandbox{}, false, nil
+	}
+	if derr != nil {
+		return Sandbox{}, false, derr
+	}
+	return Sandbox{
+		Name:      name,
+		Image:     dep.Annotations[AnnoImage],
+		Phase:     "Pending",
+		URL:       c.ServiceDNS(res),
+		Creator:   dep.Annotations[AnnoCreator],
+		Session:   dep.Annotations[AnnoSession],
+		CreatedAt: dep.CreationTimestamp.UnixMilli(),
+	}, true, nil
 }
 
-// List returns every sandbox the manager owns in its namespace.
-func (c *Client) List(ctx context.Context) ([]Sandbox, error) {
-	pods, err := c.cs.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
+// depPod returns the Deployment's pod (matched by the sandbox labels), or nil
+// when the pod does not exist yet.
+func (c *Client) depPod(ctx context.Context, res string) (*corev1.Pod, error) {
+	list, err := c.cs.CoreV1().Pods(c.namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: LabelManaged + "=1",
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Sandbox, 0, len(pods.Items))
-	for i := range pods.Items {
-		out = append(out, toSandbox(c, &pods.Items[i]))
+	for i := range list.Items {
+		if podOwnerDeployment(&list.Items[i]) == res {
+			return &list.Items[i], nil
+		}
+	}
+	// Fallback: the pod's name is prefixed by the Deployment name.
+	for i := range list.Items {
+		if strings.HasPrefix(list.Items[i].Name, res+"-") {
+			return &list.Items[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// podOwnerDeployment maps a pod to its owning Deployment name (pod -> ReplicaSet
+// -> Deployment; the ReplicaSet name is the Deployment name + a hash suffix).
+func podOwnerDeployment(p *corev1.Pod) string {
+	for _, o := range p.OwnerReferences {
+		if o.Kind == "ReplicaSet" {
+			if i := strings.LastIndex(o.Name, "-"); i > 0 {
+				return o.Name[:i]
+			}
+			return o.Name
+		}
+	}
+	return ""
+}
+
+// List returns every sandbox the manager owns in its namespace.
+func (c *Client) List(ctx context.Context) ([]Sandbox, error) {
+	deps, err := c.cs.AppsV1().Deployments(c.namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: LabelManaged + "=1",
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Sandbox, 0, len(deps.Items))
+	for i := range deps.Items {
+		d := &deps.Items[i]
+		pod, perr := c.depPod(ctx, d.Name)
+		if perr != nil || pod == nil {
+			out = append(out, Sandbox{Name: d.Labels[LabelName], Image: d.Annotations[AnnoImage], Phase: "Pending", URL: c.ServiceDNS(d.Name), Creator: d.Annotations[AnnoCreator], Session: d.Annotations[AnnoSession], CreatedAt: d.CreationTimestamp.UnixMilli()})
+			continue
+		}
+		out = append(out, toSandbox(c, pod))
 	}
 	return out, nil
 }
@@ -436,7 +504,7 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 	res := resourceName(name)
 	// Only delete something we own (avoid nuking an unrelated object that
 	// happens to share the name).
-	if _, err := c.cs.CoreV1().Pods(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+	if _, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
 		return false, nil
 	} else if err != nil {
 		return false, err
@@ -444,10 +512,11 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 	if err := c.deleteObjects(ctx, res); err != nil {
 		return false, err
 	}
-	// Wait for the pod to be gone (deletion is asynchronous).
+	// Wait for the Job to be gone (deletion is asynchronous; the Job's pod is
+	// garbage-collected with it).
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := c.cs.CoreV1().Pods(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		if _, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
 			return true, nil
 		}
 		select {
@@ -473,7 +542,9 @@ func (c *Client) Resolve(ctx context.Context, name string) (string, string, erro
 func (c *Client) deleteObjects(ctx context.Context, res string) error {
 	_ = c.cs.CoreV1().Services(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
 	_ = c.cs.CoreV1().Secrets(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
-	err := c.cs.CoreV1().Pods(c.namespace).Delete(ctx, res, metav1.DeleteOptions{})
+	// Foreground propagation so the Deployment's owned pod is deleted with it.
+	prop := metav1.DeletePropagationForeground
+	err := c.cs.AppsV1().Deployments(c.namespace).Delete(ctx, res, metav1.DeleteOptions{PropagationPolicy: &prop})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}

@@ -18,6 +18,36 @@ func newTestClient() *Client {
 	return NewWithClientset(fake.NewSimpleClientset(), Config{Namespace: "worker"})
 }
 
+// seedSandboxPod materializes the Deployment's pod in the fake clientset (a
+// fake clientset does NOT create the Deployment's pods), carrying the sandbox
+// labels so depPod finds it.
+func seedSandboxPod(t *testing.T, c *Client, ctx context.Context, name string) *corev1.Pod {
+	t.Helper()
+	res := resourceName(name)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      res + "-abcde",
+			Namespace: "worker",
+			Labels:    map[string]string{LabelManaged: "1", LabelName: name},
+		},
+	}
+	if _, err := c.cs.CoreV1().Pods("worker").Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed pod: %v", err)
+	}
+	return pod
+}
+
+// depPodSpec returns the sandbox Deployment's pod template spec (a fake
+// clientset does not materialize the Deployment's pods).
+func depPodSpec(t *testing.T, c *Client, ctx context.Context, name string) corev1.PodSpec {
+	t.Helper()
+	d, err := c.cs.AppsV1().Deployments("worker").Get(ctx, resourceName(name), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get deployment: %v", err)
+	}
+	return d.Spec.Template.Spec
+}
+
 func TestCreateSetsRuntimeClass(t *testing.T) {
 	c := newTestClient()
 	ctx := context.Background()
@@ -30,14 +60,11 @@ func TestCreateSetsRuntimeClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("gpu"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
+	pod := depPodSpec(t, c, ctx, "gpu")
+	if pod.RuntimeClassName == nil || *pod.RuntimeClassName != "nvidia" {
+		t.Fatalf("runtimeClassName = %v, want nvidia", pod.RuntimeClassName)
 	}
-	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != "nvidia" {
-		t.Fatalf("runtimeClassName = %v, want nvidia", pod.Spec.RuntimeClassName)
-	}
-	if got := pod.Spec.Containers[0].Resources.Limits["nvidia.com/gpu"]; got.String() != "1" {
+	if got := pod.Containers[0].Resources.Limits["nvidia.com/gpu"]; got.String() != "1" {
 		t.Fatalf("gpu limit = %v", got)
 	}
 }
@@ -67,19 +94,16 @@ func TestCreateListResolveDelete(t *testing.T) {
 	}
 
 	// Pod has WORKER_TOKEN + port env.
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("dev"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("pod: %v", err)
-	}
+	pod := depPodSpec(t, c, ctx, "dev")
 	envs := map[string]string{}
-	for _, e := range pod.Spec.Containers[0].Env {
+	for _, e := range pod.Containers[0].Env {
 		envs[e.Name] = e.Value
 	}
 	if envs["WORKER_TOKEN"] != token || envs["WORKER_PORT"] != "48080" {
 		t.Fatalf("bad env: %+v", envs)
 	}
-	if pod.Annotations[AnnoCreator] != "alice" {
-		t.Fatalf("creator annotation missing")
+	if dep, derr := c.cs.AppsV1().Deployments("worker").Get(ctx, resourceName("dev"), metav1.GetOptions{}); derr != nil || dep.Annotations[AnnoCreator] != "alice" {
+		t.Fatalf("creator annotation missing: %v", derr)
 	}
 
 	// Service selects the pod.
@@ -110,8 +134,8 @@ func TestCreateListResolveDelete(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("delete: %v ok=%v", err, ok)
 	}
-	if _, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("dev"), metav1.GetOptions{}); err == nil {
-		t.Fatal("pod still present")
+	if _, err := c.cs.AppsV1().Deployments("worker").Get(ctx, resourceName("dev"), metav1.GetOptions{}); err == nil {
+		t.Fatal("deployment still present")
 	}
 	// Deleting again is a no-op, not an error.
 	ok, err = c.Delete(ctx, "dev")
@@ -181,15 +205,12 @@ func TestCreateDefaultsRestartPolicyAndResources(t *testing.T) {
 	if _, _, err := c.Create(ctx, Spec{Name: "def", Image: "img:1", Creator: "alice"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("def"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
+	pod := depPodSpec(t, c, ctx, "def")
+	// A Deployment's pod template requires Always (the worker is long-lived).
+	if pod.RestartPolicy != corev1.RestartPolicyAlways {
+		t.Fatalf("restartPolicy = %q, want Always", pod.RestartPolicy)
 	}
-	// Default restart policy is Never: a sandbox that exits stays Failed.
-	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
-		t.Fatalf("restartPolicy = %q, want Never", pod.Spec.RestartPolicy)
-	}
-	res := pod.Spec.Containers[0].Resources
+	res := pod.Containers[0].Resources
 	cpuReq, cpuLim := res.Requests[corev1.ResourceCPU], res.Limits[corev1.ResourceCPU]
 	memReq, memLim := res.Requests[corev1.ResourceMemory], res.Limits[corev1.ResourceMemory]
 	if got := cpuReq.String(); got != "500m" {
@@ -212,11 +233,8 @@ func TestCreateExplicitResourcesKeepRequestEqualsLimit(t *testing.T) {
 	if _, _, err := c.Create(ctx, Spec{Name: "ex", Image: "img:1", CPU: "250m", Memory: "512Mi"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("ex"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	res := pod.Spec.Containers[0].Resources
+	pod := depPodSpec(t, c, ctx, "ex")
+	res := pod.Containers[0].Resources
 	cpuReq, cpuLim := res.Requests[corev1.ResourceCPU], res.Limits[corev1.ResourceCPU]
 	memReq, memLim := res.Requests[corev1.ResourceMemory], res.Limits[corev1.ResourceMemory]
 	if cpuReq.String() != "250m" || cpuLim.String() != "250m" {
@@ -226,21 +244,6 @@ func TestCreateExplicitResourcesKeepRequestEqualsLimit(t *testing.T) {
 		t.Fatalf("mem req/lim = %v/%v, want 512Mi/512Mi", memReq, memLim)
 	}
 }
-func TestCreateRestartPolicyOverride(t *testing.T) {
-	cs := fake.NewSimpleClientset()
-	c := NewWithClientset(cs, Config{Namespace: "worker", RestartPolicy: "Always"})
-	ctx := context.Background()
-	if _, _, err := c.Create(ctx, Spec{Name: "always", Image: "img:1"}); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	pod, err := cs.CoreV1().Pods("worker").Get(ctx, resourceName("always"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pod.Spec.RestartPolicy != corev1.RestartPolicyAlways {
-		t.Fatalf("restartPolicy = %q, want Always", pod.Spec.RestartPolicy)
-	}
-}
 
 func TestFailedPodDiagnosticsAndWaitReady(t *testing.T) {
 	c := newTestClient()
@@ -248,11 +251,8 @@ func TestFailedPodDiagnosticsAndWaitReady(t *testing.T) {
 	if _, _, err := c.Create(ctx, Spec{Name: "oom", Image: "img:1", Creator: "alice"}); err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Force the pod into a Failed/OOMKilled state.
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("oom"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Materialize the Deployment's pod, then force it into a Failed/OOMKilled state.
+	pod := seedSandboxPod(t, c, ctx, "oom")
 	pod.Status.Phase = corev1.PodFailed
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
 		Name: "worker", RestartCount: 3, Ready: false,
@@ -325,37 +325,31 @@ func TestGoldenDiskCacheMount(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("vm"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pod := depPodSpec(t, c, ctx, "vm")
 	found := false
-	for _, v := range pod.Spec.Volumes {
+	for _, v := range pod.Volumes {
 		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == "golden" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("golden PVC volume not mounted: %+v", pod.Spec.Volumes)
+		t.Fatalf("golden PVC volume not mounted: %+v", pod.Volumes)
 	}
 	mounted := false
-	for _, mnt := range pod.Spec.Containers[0].VolumeMounts {
+	for _, mnt := range pod.Containers[0].VolumeMounts {
 		if mnt.MountPath == GoldenDiskCachePath {
 			mounted = true
 		}
 	}
 	if !mounted {
-		t.Fatalf("cache not mounted at %s: %+v", GoldenDiskCachePath, pod.Spec.Containers[0].VolumeMounts)
+		t.Fatalf("cache not mounted at %s: %+v", GoldenDiskCachePath, pod.Containers[0].VolumeMounts)
 	}
 	// A plain sandbox (no GoldenDiskPVC) must NOT mount it.
 	if _, _, err := c.Create(ctx, Spec{Name: "plain", Image: "img:1", Creator: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	plain, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("plain"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, v := range plain.Spec.Volumes {
+	plain := depPodSpec(t, c, ctx, "plain")
+	for _, v := range plain.Volumes {
 		if v.PersistentVolumeClaim != nil {
 			t.Fatalf("plain sandbox must not mount a PVC: %+v", v)
 		}
@@ -371,11 +365,8 @@ func TestSandboxImagePullPolicyAlways(t *testing.T) {
 	if _, _, err := c.Create(ctx, Spec{Name: "pp", Image: "img:1", Creator: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("pp"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := pod.Spec.Containers[0].ImagePullPolicy; got != corev1.PullAlways {
+	pod := depPodSpec(t, c, ctx, "pp")
+	if got := pod.Containers[0].ImagePullPolicy; got != corev1.PullAlways {
 		t.Fatalf("imagePullPolicy = %q, want Always", got)
 	}
 }
@@ -394,23 +385,20 @@ func TestSandboxVolumeMounts(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, resourceName("vol"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pod := depPodSpec(t, c, ctx, "vol")
 	// Two PVC volumes + two mounts.
 	pvcVols := 0
-	for _, v := range pod.Spec.Volumes {
+	for _, v := range pod.Volumes {
 		if v.PersistentVolumeClaim != nil {
 			pvcVols++
 		}
 	}
 	if pvcVols != 2 {
-		t.Fatalf("pvc volumes = %d, want 2 (%+v)", pvcVols, pod.Spec.Volumes)
+		t.Fatalf("pvc volumes = %d, want 2 (%+v)", pvcVols, pod.Volumes)
 	}
 	var rw, ro *corev1.VolumeMount
-	for i := range pod.Spec.Containers[0].VolumeMounts {
-		m := &pod.Spec.Containers[0].VolumeMounts[i]
+	for i := range pod.Containers[0].VolumeMounts {
+		m := &pod.Containers[0].VolumeMounts[i]
 		switch m.MountPath {
 		case "/data":
 			rw = m

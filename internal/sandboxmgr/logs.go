@@ -3,6 +3,7 @@ package sandboxmgr
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -39,7 +40,14 @@ func podLogOptions(opts LogOptions) *corev1.PodLogOptions {
 func (c *Client) Logs(ctx context.Context, name string, opts LogOptions) ([]string, error) {
 	o := podLogOptions(opts)
 	o.Follow = false
-	req := c.cs.CoreV1().Pods(c.namespace).GetLogs(resourceName(name), o)
+	pod, err := c.depPod(ctx, resourceName(name))
+	if err != nil {
+		return nil, err
+	}
+	if pod == nil {
+		return nil, fmt.Errorf("sandbox %s: no pod yet", name)
+	}
+	req := c.cs.CoreV1().Pods(c.namespace).GetLogs(pod.Name, o)
 	rc, err := req.Stream(ctx)
 	if err != nil {
 		return nil, err
@@ -65,7 +73,16 @@ func (c *Client) Follow(ctx context.Context, name string, opts LogOptions) (<-ch
 		defer close(errc)
 		o := podLogOptions(opts)
 		o.Follow = true
-		req := c.cs.CoreV1().Pods(c.namespace).GetLogs(resourceName(name), o)
+		pod, perr := c.depPod(ctx, resourceName(name))
+		if perr != nil || pod == nil {
+			if perr != nil {
+				errc <- perr
+			} else {
+				errc <- fmt.Errorf("sandbox %s: no pod yet", name)
+			}
+			return
+		}
+		req := c.cs.CoreV1().Pods(c.namespace).GetLogs(pod.Name, o)
 		rc, err := req.Stream(ctx)
 		if err != nil {
 			errc <- err
@@ -96,9 +113,12 @@ func (c *Client) Events(ctx context.Context, name string, limit int) []string {
 	if limit <= 0 {
 		limit = 20
 	}
-	res := resourceName(name)
+	pod, perr := c.depPod(ctx, resourceName(name))
+	if perr != nil || pod == nil {
+		return nil
+	}
 	list, err := c.cs.CoreV1().Events(c.namespace).List(ctx, metav1.ListOptions{
-		FieldSelector: "involvedObject.kind=Pod,involvedObject.name=" + res,
+		FieldSelector: "involvedObject.kind=Pod,involvedObject.name=" + pod.Name,
 	})
 	if err != nil {
 		return nil

@@ -137,8 +137,8 @@ func Load(path string) (Settings, error) {
 
 // Rendered is the pod-level result.
 type Rendered struct {
-	NeedsTun         bool
-	DeviceLimits     map[string]string
+	NeedsTun     bool
+	DeviceLimits map[string]string
 	// Devices are the generic device aliases rendered via the device plugin
 	// (informational; the actual injection is driven by DeviceLimits).
 	Devices          []string

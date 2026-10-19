@@ -1,7 +1,7 @@
 # easyops
 
 **easyops is the third core server** (alongside [`easyvcs`](../../easyvcs) and
-[`artifact`](../../artifact)): the Kubernetes / BuildKit / Helm **ops** backend
+[`artifact`](../../artifact)): the Kubernetes / BuildKit **ops** backend
 that the workspace gateway calls over the cluster network.
 
 It has **two layers**:
@@ -31,7 +31,6 @@ network API) is the remaining step.
 | `internal/servicesmgr` | Long-lived Deployment + Service: deploy / lifecycle / scale / manifest / rollout rollback, PVCs, logs, live watch. | **migrated** |
 | `internal/k8swatch` | Coalesced Kubernetes watch primitive (many resources → one "changed" signal). | **migrated** |
 | `internal/imagebuild` | `buildctl` against the cluster buildkitd → push to the registry. | **migrated** |
-| `internal/helmmgr` | Helm SDK templating + strict namespaced-kind apply, release history in ConfigMaps. | **migrated** |
 | `internal/sandboxreaper` | Idle-sandbox reclamation. Pure library: the worker client is injected via `NewWorker` (interface), so it never imports the worker protocol. | **migrated** |
 | `internal/opssvc` | **Service adapter** (not a library): maps `OpsService` RPCs onto the library, enforces the service token, stamps/filters `owner`, and hosts the concrete worker client. The only `internal` package that imports `connectrpc`. | **new** |
 
@@ -52,24 +51,21 @@ network API) is the remaining step.
   `ApplyServiceManifest` / `RollbackService` / `ServiceLogs` /
   `WatchServiceLogs` (stream)
 - **pvc**: `CreatePVC` / `ListPVCs` / `GetPVC` / `DeletePVC`
-- **helm**: `HelmDeploy` / `HelmList` / `HelmHistory` / `HelmRollback` /
-  `HelmUninstall`
 - **image**: `BuildImage` (repo Dockerfile → buildkit → registry) / `ImportImage`
   (`FROM <source>` re-push)
 - **live**: `WatchWorkspace(stream)` — an initial full snapshot, then a frame
-  whenever any owned **sandbox, service, PVC or Helm release** changes. **Every
+  whenever any owned **sandbox, service or PVC** changes. **Every
   frame is self-contained** — it carries all owner-filtered lists (`sandboxes` /
-  `services` / `pvcs` / `helm_releases`) — while the per-kind bits
+  `services` / `pvcs`) — while the per-kind bits
   (`sandboxes_changed` / `services_changed` / `pvcs_changed` /
-  `helm_releases_changed`) flag which kind(s) changed this frame (all configured
+  `pvcs_changed`) flag which kind(s) changed this frame (all configured
   kinds true on the snapshot frame; a kind whose backend is absent stays false).
-  Fields `services`=3 / `pvcs`=4 / `*_changed`=5..7 / `helm_releases`=8 /
-  `helm_releases_changed`=9 were **added** to the original message (fields 1/2
-  unchanged) — a backward-compatible extension so the gateway can map it straight
-  onto `workspace.v1`'s stream.
+  Fields `services`=3 / `pvcs`=4 / `*_changed`=5..7 were added to the original
+  message (fields 1/2 unchanged); fields 8/9 (was helm_releases / *_changed) are
+  now reserved.
 - **health**: `/healthz` (liveness, process only) and `/readyz` (readiness: does
   a `k8scheck` probe reach the Kubernetes API)
-Helm and image RPCs take the **repo tarball in the request** (`archive` bytes), so
+Image RPCs take the **repo tarball in the request** (`archive` bytes), so
 easyops needs **no VCS access** — the gateway fetches the archive from EasyVCS and
 passes the bytes.
 
@@ -205,7 +201,7 @@ A healthy deployment logs **no** `rbac: ... DENIED` line at boot.
 
 ## Boundary
 
-**In scope (ops, belongs here):** sandbox / service / helm / image / PVC
+**In scope (ops, belongs here):** sandbox / service / image / PVC
 lifecycle; runtime capability rendering (KVM/GPU, never `privileged`); RBAC
 self-check; idle reclamation; raw k8s watch primitives; the `OpsService` network
 surface. Its **runtime manifests live in `easy-vcs/deploy`** (the
@@ -219,8 +215,8 @@ agent clients; auth/tokens/`X-Session-Name` binding; the local sqlite store;
 ## Import-graph verdict
 
 **Verified**: easyops imports **no gateway/business package**. The library
-packages import only stdlib + `k8s.io/*` (+ `sigs.k8s.io/yaml`, + `helm.sh/helm`
-in `helmmgr`); `connectrpc` appears **only** in `cmd/easyops`, `gen/easyops/v1`
+packages import only stdlib + `k8s.io/*` (+ `sigs.k8s.io/yaml`); `connectrpc`
+appears **only** in `cmd/easyops`, `gen/easyops/v1`
 and the `internal/opssvc` adapter.
 
 ```sh
@@ -231,7 +227,7 @@ go list -deps ./... | grep -Ei \
 
 # connectrpc must NOT reach the library packages (must be empty)
 go list -deps ./internal/runtimeprofiles ./internal/sandboxmgr ./internal/servicesmgr \
-  ./internal/k8swatch ./internal/k8scheck ./internal/imagebuild ./internal/helmmgr \
+  ./internal/k8swatch ./internal/k8scheck ./internal/imagebuild \
   ./internal/sandboxreaper | grep connectrpc
 # -> (no output)
 ```
@@ -254,11 +250,11 @@ bash scripts/gen-proto.sh
 
 1. **Phase 1 (done).** `runtimeprofiles` + `sandboxmgr` (+ `k8scheck`).
 2. **Phase 2 (done).** `servicesmgr` + `k8swatch`.
-3. **Phase 3 (done).** `imagebuild` + `helmmgr` (+ `helm.sh/helm/v3`).
+3. **Phase 3 (done).** `imagebuild`. (Helm release management was later REMOVED.)
 4. **Phase 4 (done).** `sandboxreaper`. (The platform manifests moved to
    [`easy-vcs/deploy`](../../deploy)'s `easyvcs-platform` chart.)
 5. **Phase 4.5 (done).** `cmd/easyops` + `proto/easyops/v1` + `internal/opssvc`:
-   the full `OpsService` surface (sandbox / services / pvc / helm / image + live).
+   the full `OpsService` surface (sandbox / services / pvc / image + live).
 6. **Phase 5 (next, gateway).** `agent-gateway` switches to calling `OpsService`
    over the network and drops the easyops library dependency (and its cluster RBAC).
 

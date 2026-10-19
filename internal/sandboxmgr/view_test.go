@@ -16,11 +16,7 @@ func TestToSandboxDiagnostics(t *testing.T) {
 	if _, _, err := c.Create(ctx, Spec{Name: "oom", Image: "img:1", Creator: "alice"}); err != nil {
 		t.Fatal(err)
 	}
-	res := resourceName("oom")
-	pod, err := c.cs.CoreV1().Pods("worker").Get(ctx, res, metav1.GetOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	pod := seedSandboxPod(t, c, ctx, "oom")
 	started := metav1.Now()
 	finished := metav1.NewTime(started.Add(3_000_000_000))
 	pod.Status.Phase = corev1.PodFailed
@@ -65,10 +61,10 @@ func TestEventsBestEffort(t *testing.T) {
 	if ev := c.Events(ctx, "ev", 20); len(ev) != 0 {
 		t.Fatalf("no events expected, got %v", ev)
 	}
-	res := resourceName("ev")
+	pod := seedSandboxPod(t, c, ctx, "ev")
 	ev := &corev1.Event{
 		ObjectMeta:     metav1.ObjectMeta{Name: "ev.1", Namespace: "worker"},
-		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: res},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: pod.Name},
 		Reason:         "BackOff", Message: "Back-off restarting failed container",
 		LastTimestamp: metav1.Now(),
 	}
