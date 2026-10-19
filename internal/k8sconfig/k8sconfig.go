@@ -1,5 +1,5 @@
 // Package k8sconfig builds the REST config for the cluster clients (sandboxmgr,
-// servicesmgr, helmmgr).
+// servicesmgr).
 //
 // easyops uses an EXPLICIT kubeconfig from EASYOPS_KUBECONFIG, ALWAYS — no other
 // source is consulted, so a deployment can run easyops in one namespace but act
