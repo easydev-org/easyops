@@ -101,6 +101,7 @@ func toPVCInfo(p servicesmgr.PVC) *opsv1.PVCInfo {
 	return &opsv1.PVCInfo{
 		Name: p.Name, Size: p.Size, StorageClass: p.StorageClass, Phase: p.Phase,
 		Owner: p.Creator, CreatedAt: p.CreatedAt, MountedBy: p.MountedBy,
-		Namespace: p.Namespace,
+		Namespace: p.Namespace, Message: p.Message, BoundVolume: p.BoundVolume,
+		AgeSeconds: p.AgeSeconds, Capacity: p.Capacity,
 	}
 }

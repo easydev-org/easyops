@@ -4091,7 +4091,22 @@ type PVCInfo struct {
 	CreatedAt    int64                  `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	MountedBy    []string               `protobuf:"bytes,7,rep,name=mounted_by,json=mountedBy,proto3" json:"mounted_by,omitempty"`
 	// namespace is the tenant-internal namespace (see ServiceInfo.namespace).
-	Namespace     string `protobuf:"bytes,8,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	Namespace string `protobuf:"bytes,8,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// message explains a claim that is NOT Bound. A PVC has only three phases
+	// (Pending / Bound / Lost) and Pending covers BOTH "the provisioner is still
+	// working" and "provisioning FAILED", so the phase alone cannot tell them
+	// apart. This is the failing event's reason+message (e.g.
+	// "ProvisioningFailed: ..."), or the waiting event's text (e.g. "waiting for
+	// first consumer to be created before binding").
+	Message string `protobuf:"bytes,9,opt,name=message,proto3" json:"message,omitempty"`
+	// bound_volume is the PersistentVolume the claim is bound to ("" = pending).
+	BoundVolume string `protobuf:"bytes,10,opt,name=bound_volume,json=boundVolume,proto3" json:"bound_volume,omitempty"`
+	// age_seconds is how long the claim has existed, so a caller can judge a
+	// Pending claim: seconds = normal, many minutes = stuck.
+	AgeSeconds int64 `protobuf:"varint,11,opt,name=age_seconds,json=ageSeconds,proto3" json:"age_seconds,omitempty"`
+	// capacity is what was ACTUALLY allocated (Status.Capacity), which can differ
+	// from `size` (the request) when a provisioner rounds up.
+	Capacity      string `protobuf:"bytes,12,opt,name=capacity,proto3" json:"capacity,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4178,6 +4193,34 @@ func (x *PVCInfo) GetMountedBy() []string {
 func (x *PVCInfo) GetNamespace() string {
 	if x != nil {
 		return x.Namespace
+	}
+	return ""
+}
+
+func (x *PVCInfo) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *PVCInfo) GetBoundVolume() string {
+	if x != nil {
+		return x.BoundVolume
+	}
+	return ""
+}
+
+func (x *PVCInfo) GetAgeSeconds() int64 {
+	if x != nil {
+		return x.AgeSeconds
+	}
+	return 0
+}
+
+func (x *PVCInfo) GetCapacity() string {
+	if x != nil {
+		return x.Capacity
 	}
 	return ""
 }
@@ -7383,7 +7426,7 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\x11terminated_reason\x18\b \x01(\tR\x10terminatedReason\x12*\n" +
 	"\x11last_state_reason\x18\t \x01(\tR\x0flastStateReason\x12\x16\n" +
 	"\x06events\x18\n" +
-	" \x03(\tR\x06events\"\xde\x01\n" +
+	" \x03(\tR\x06events\"\xd8\x02\n" +
 	"\aPVCInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\tR\x04size\x12#\n" +
@@ -7394,7 +7437,13 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"created_at\x18\x06 \x01(\x03R\tcreatedAt\x12\x1d\n" +
 	"\n" +
 	"mounted_by\x18\a \x03(\tR\tmountedBy\x12\x1c\n" +
-	"\tnamespace\x18\b \x01(\tR\tnamespace\"\x93\x01\n" +
+	"\tnamespace\x18\b \x01(\tR\tnamespace\x12\x18\n" +
+	"\amessage\x18\t \x01(\tR\amessage\x12!\n" +
+	"\fbound_volume\x18\n" +
+	" \x01(\tR\vboundVolume\x12\x1f\n" +
+	"\vage_seconds\x18\v \x01(\x03R\n" +
+	"ageSeconds\x12\x1a\n" +
+	"\bcapacity\x18\f \x01(\tR\bcapacity\"\x93\x01\n" +
 	"\x10CreatePVCRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +

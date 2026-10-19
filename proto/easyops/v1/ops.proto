@@ -503,6 +503,21 @@ message PVCInfo {
   repeated string mounted_by = 7;
   // namespace is the tenant-internal namespace (see ServiceInfo.namespace).
   string namespace = 8;
+  // message explains a claim that is NOT Bound. A PVC has only three phases
+  // (Pending / Bound / Lost) and Pending covers BOTH "the provisioner is still
+  // working" and "provisioning FAILED", so the phase alone cannot tell them
+  // apart. This is the failing event's reason+message (e.g.
+  // "ProvisioningFailed: ..."), or the waiting event's text (e.g. "waiting for
+  // first consumer to be created before binding").
+  string message = 9;
+  // bound_volume is the PersistentVolume the claim is bound to ("" = pending).
+  string bound_volume = 10;
+  // age_seconds is how long the claim has existed, so a caller can judge a
+  // Pending claim: seconds = normal, many minutes = stuck.
+  int64 age_seconds = 11;
+  // capacity is what was ACTUALLY allocated (Status.Capacity), which can differ
+  // from `size` (the request) when a provisioner rounds up.
+  string capacity = 12;
 }
 
 message CreatePVCRequest {
