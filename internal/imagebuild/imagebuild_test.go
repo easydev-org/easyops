@@ -169,7 +169,7 @@ func TestFullRef(t *testing.T) {
 }
 
 func TestBuildValidatesContext(t *testing.T) {
-	b := &Builder{RegistryHost: "reg", Buildctl: "true"}
+	b := &Builder{RegistryHost: "reg"}
 	dir := t.TempDir()
 	// Missing dockerfile.
 	if _, err := b.Build(t.Context(), Request{ContextDir: dir, Repo: "org/x", Tag: "1"}); err == nil {
@@ -178,7 +178,7 @@ func TestBuildValidatesContext(t *testing.T) {
 }
 
 func TestImportValidatesInputs(t *testing.T) {
-	b := &Builder{RegistryHost: "reg", Buildctl: "true"}
+	b := &Builder{RegistryHost: "reg"}
 	cases := []ImportRequest{
 		{Repo: "org/x", Tag: "1"},                            // no source
 		{Source: "docker.io/library/redis:7", Tag: "7"},      // no repo
@@ -216,57 +216,106 @@ func TestScheme(t *testing.T) {
 	}
 }
 
-func TestDockerConfigAuth(t *testing.T) {
-	dir := t.TempDir()
-	auth := base64.StdEncoding.EncodeToString([]byte("root:devpassword"))
-	cfg := `{"auths":{"git.agent.svc.cluster.local":{"auth":"` + auth + `"},"ghcr.io":{"auth":"` + auth + `"}}}`
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DOCKER_CONFIG", dir)
-	b := &Builder{}
-	u, p, ok := b.dockerConfigAuth("git.agent.svc.cluster.local")
-	if !ok || u != "root" || p != "devpassword" {
-		t.Fatalf("auth = %q/%q ok=%v", u, p, ok)
-	}
-	// Unknown host -> no creds.
-	if _, _, ok := b.dockerConfigAuth("unknown.example"); ok {
-		t.Fatal("unknown host must not resolve creds")
-	}
-	// No DOCKER_CONFIG -> no creds.
-	t.Setenv("DOCKER_CONFIG", "")
-	if _, _, ok := b.dockerConfigAuth("git.agent.svc.cluster.local"); ok {
-		t.Fatal("no DOCKER_CONFIG must not resolve creds")
-	}
-}
+// The three tests below replace an older pair that exercised a REMOVED design:
+// easyops used to shell out to a `buildctl` binary and hand it a merged
+// DOCKER_CONFIG directory (Buildctl / dockerConfigAuth / mergeDockerConfig).
+// The builder now links the BuildKit Go client and passes an in-memory auth
+// provider (dockerConfigJSON), so the old assertions could not compile and,
+// more importantly, were testing something that no longer exists.
 
-func TestMergeDockerConfigKeepsDeploymentAuths(t *testing.T) { // Point DOCKER_CONFIG at a temp dir holding the deployment's push creds.
-	deploy := t.TempDir()
-	if err := os.WriteFile(filepath.Join(deploy, "config.json"),
-		[]byte(`{"auths":{"git.agent.svc.cluster.local":{"auth":"ZGVwbG95"}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("DOCKER_CONFIG", deploy)
-	b := &Builder{}
-	dir, err := b.mergeDockerConfig("docker.io/library/redis:7", "user", "tok")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
-	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+// TestDockerConfigJSONCarriesTheDeploymentCreds: RegistryUser/RegistryPass must
+// land under EVERY URL shape buildkit may look a host up by.
+//
+// WHY every shape: the auth provider is asked for a key the caller has in hand,
+// and different code paths pass "host", "http://host", "https://host/v2/", ...
+// A single key works for the push but misses the pull (or the reverse).
+func TestDockerConfigJSONCarriesTheDeploymentCreds(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", "") // isolate from any ambient config
+	b := &Builder{RegistryHost: "reg.example", RegistryUser: "root", RegistryPass: "tok"}
+
+	raw, err := b.dockerConfigJSON()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var cfg struct {
-		Auths map[string]struct{ Auth string } `json:"auths"`
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
 	}
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Auths["git.agent.svc.cluster.local"].Auth != "ZGVwbG95" {
-		t.Fatal("deployment push creds must be preserved")
+	want := base64.StdEncoding.EncodeToString([]byte("root:tok"))
+	for _, key := range []string{
+		"reg.example",
+		"https://reg.example",
+		"http://reg.example",
+		"https://reg.example/v2/",
+		"http://reg.example/v2/",
+	} {
+		if cfg.Auths[key].Auth != want {
+			t.Errorf("auth for %q = %q, want the deployment creds", key, cfg.Auths[key].Auth)
+		}
 	}
-	if cfg.Auths["docker.io"].Auth == "" {
-		t.Fatal("source registry creds must be added")
+}
+
+// TestDockerConfigJSONOmitsEmptyCreds: with no configured credentials the auths
+// map must stay EMPTY rather than carry an ":" blob, which buildkit would
+// present as an anonymous login and turn a clean 401 into a confusing one.
+func TestDockerConfigJSONOmitsEmptyCreds(t *testing.T) {
+	t.Setenv("DOCKER_CONFIG", "")
+	b := &Builder{RegistryHost: "reg.example"}
+
+	raw, err := b.dockerConfigJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Auths map[string]any `json:"auths"`
+	}
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Auths) != 0 {
+		t.Errorf("auths = %v, want empty", cfg.Auths)
+	}
+}
+
+// TestDockerConfigJSONKeepsAmbientAuths: a DOCKER_CONFIG on disk holds
+// credentials for OTHER registries (an upstream mirror, a second registry).
+// Those must survive, and the deployment's credential must WIN for its own host
+// — it is the authoritative one.
+func TestDockerConfigJSONKeepsAmbientAuths(t *testing.T) {
+	dir := t.TempDir()
+	ambient := base64.StdEncoding.EncodeToString([]byte("someone:else"))
+	deployment := base64.StdEncoding.EncodeToString([]byte("root:tok"))
+	cfg := `{"auths":{
+		"ghcr.io":{"auth":"` + ambient + `"},
+		"reg.example":{"auth":"` + ambient + `"}
+	}}`
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DOCKER_CONFIG", dir)
+
+	b := &Builder{RegistryHost: "reg.example", RegistryUser: "root", RegistryPass: "tok"}
+	raw, err := b.dockerConfigJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Auths["ghcr.io"].Auth != ambient {
+		t.Error("an unrelated registry's ambient credential must be preserved")
+	}
+	if out.Auths["reg.example"].Auth != deployment {
+		t.Errorf("the deployment credential must WIN for its own host, got %q",
+			out.Auths["reg.example"].Auth)
 	}
 }
