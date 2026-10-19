@@ -33,6 +33,7 @@ import (
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
 	"github.com/easy-platform/easyops/internal/imagebuild"
+	"github.com/easy-platform/easyops/internal/jobmgr"
 	"github.com/easy-platform/easyops/internal/k8scheck"
 	"github.com/easy-platform/easyops/internal/k8sconfig"
 	"github.com/easy-platform/easyops/internal/opssvc"
@@ -138,12 +139,26 @@ func main() {
 		log.Printf("warn: services backend is NIL: PVC/service RPCs are unavailable and golden_disk cannot create its shared cache PVC")
 	}
 	builder := newImageBuilder()
+	// Jobs backend (batch/v1): run-to-completion workloads (one-shot builds,
+	// migrations, test runs). Same construction contract as services.
+	jobs, err := jobmgr.New(jobmgr.Config{
+		Namespace:     sandboxNS,
+		CPURequest:    os.Getenv("SERVICE_CPU_REQUEST"),
+		CPULimit:      os.Getenv("SERVICE_CPU_LIMIT"),
+		MemoryRequest: os.Getenv("SERVICE_MEMORY_REQUEST"),
+		MemoryLimit:   os.Getenv("SERVICE_MEMORY_LIMIT"),
+	})
+	if err != nil {
+		log.Printf("warn: jobs backend unavailable: %v", err)
+		jobs = nil
+	}
 	svc := opssvc.New(opssvc.Deps{
 		Sandbox:             sbx,
 		Runtime:             runtime,
 		DefaultSandboxImage: os.Getenv("DEFAULT_SANDBOX_IMAGE"),
 		Services:            services,
 		Builder:             builder,
+		Jobs:                jobs,
 		PVCStorageClass:     os.Getenv("PVC_STORAGE_CLASS"),
 		PVCDefaultSize:      envOr("PVC_DEFAULT_SIZE", "1Gi"),
 		GoldenDiskCachePVC:  os.Getenv("SANDBOX_GOLDEN_PVC"),

@@ -107,6 +107,18 @@ const (
 	OpsServiceBuildImageStreamProcedure = "/easyops.v1.OpsService/BuildImageStream"
 	// OpsServiceImportImageProcedure is the procedure name of the OpsService's ImportImage RPC.
 	OpsServiceImportImageProcedure = "/easyops.v1.OpsService/ImportImage"
+	// OpsServiceCreateJobProcedure is the procedure name of the OpsService's CreateJob RPC.
+	OpsServiceCreateJobProcedure = "/easyops.v1.OpsService/CreateJob"
+	// OpsServiceListJobsProcedure is the procedure name of the OpsService's ListJobs RPC.
+	OpsServiceListJobsProcedure = "/easyops.v1.OpsService/ListJobs"
+	// OpsServiceGetJobProcedure is the procedure name of the OpsService's GetJob RPC.
+	OpsServiceGetJobProcedure = "/easyops.v1.OpsService/GetJob"
+	// OpsServiceJobLogsProcedure is the procedure name of the OpsService's JobLogs RPC.
+	OpsServiceJobLogsProcedure = "/easyops.v1.OpsService/JobLogs"
+	// OpsServiceWatchJobLogsProcedure is the procedure name of the OpsService's WatchJobLogs RPC.
+	OpsServiceWatchJobLogsProcedure = "/easyops.v1.OpsService/WatchJobLogs"
+	// OpsServiceDeleteJobProcedure is the procedure name of the OpsService's DeleteJob RPC.
+	OpsServiceDeleteJobProcedure = "/easyops.v1.OpsService/DeleteJob"
 	// OpsServiceWatchWorkspaceProcedure is the procedure name of the OpsService's WatchWorkspace RPC.
 	OpsServiceWatchWorkspaceProcedure = "/easyops.v1.OpsService/WatchWorkspace"
 )
@@ -350,6 +362,48 @@ var (
 			Procedure:  OpsServiceImportImageProcedure,
 		}
 	})
+	opsServiceCreateJobSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("CreateJob"),
+			Procedure:  OpsServiceCreateJobProcedure,
+		}
+	})
+	opsServiceListJobsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("ListJobs"),
+			Procedure:  OpsServiceListJobsProcedure,
+		}
+	})
+	opsServiceGetJobSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("GetJob"),
+			Procedure:  OpsServiceGetJobProcedure,
+		}
+	})
+	opsServiceJobLogsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("JobLogs"),
+			Procedure:  OpsServiceJobLogsProcedure,
+		}
+	})
+	opsServiceWatchJobLogsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeServer,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("WatchJobLogs"),
+			Procedure:  OpsServiceWatchJobLogsProcedure,
+		}
+	})
+	opsServiceDeleteJobSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("DeleteJob"),
+			Procedure:  OpsServiceDeleteJobProcedure,
+		}
+	})
 	opsServiceWatchWorkspaceSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeServer,
@@ -400,6 +454,16 @@ type OpsServiceClient interface {
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest) (OpsServiceBuildImageStreamClientStream, error)
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
+	// ---- jobs (run-to-completion workloads) ----
+	// A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot
+	// buildctl pod, a migration, or a test run. It is distinct from a Service
+	// (long-lived Deployment) and a Sandbox (a worker to talk to).
+	CreateJob(context.Context, *v1.CreateJobRequest) (*v1.CreateJobResponse, error)
+	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
+	GetJob(context.Context, *v1.GetJobRequest) (*v1.GetJobResponse, error)
+	JobLogs(context.Context, *v1.JobLogsRequest) (*v1.JobLogsResponse, error)
+	WatchJobLogs(context.Context, *v1.WatchJobLogsRequest) (OpsServiceWatchJobLogsClientStream, error)
+	DeleteJob(context.Context, *v1.DeleteJobRequest) (*v1.DeleteJobResponse, error)
 	// ---- live ----
 	WatchWorkspace(context.Context, *v1.WatchWorkspaceRequest) (OpsServiceWatchWorkspaceClientStream, error)
 }
@@ -473,6 +537,26 @@ func (s OpsServiceBuildImageStreamClientStream) Close() error {
 	return s.stream.Close()
 }
 
+// OpsServiceWatchJobLogsClientStream is the client stream for the OpsService's WatchJobLogs RPC.
+type OpsServiceWatchJobLogsClientStream struct {
+	stream connect.ClientStream
+}
+
+// Receive returns the next response message from the server.
+func (s OpsServiceWatchJobLogsClientStream) Receive() (*v1.WatchJobLogsResponse, error) {
+	var res v1.WatchJobLogsResponse
+	if err := s.stream.Receive(&res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+// Close releases the stream's resources. It is idempotent and is typically deferred to clean up a
+// stream abandoned before io.EOF.
+func (s OpsServiceWatchJobLogsClientStream) Close() error {
+	return s.stream.Close()
+}
+
 // OpsServiceWatchWorkspaceClientStream is the client stream for the OpsService's WatchWorkspace
 // RPC.
 type OpsServiceWatchWorkspaceClientStream struct {
@@ -535,6 +619,16 @@ type OpsServiceHandler interface {
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest, OpsServiceBuildImageStreamServerStream) error
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
+	// ---- jobs (run-to-completion workloads) ----
+	// A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot
+	// buildctl pod, a migration, or a test run. It is distinct from a Service
+	// (long-lived Deployment) and a Sandbox (a worker to talk to).
+	CreateJob(context.Context, *v1.CreateJobRequest) (*v1.CreateJobResponse, error)
+	ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error)
+	GetJob(context.Context, *v1.GetJobRequest) (*v1.GetJobResponse, error)
+	JobLogs(context.Context, *v1.JobLogsRequest) (*v1.JobLogsResponse, error)
+	WatchJobLogs(context.Context, *v1.WatchJobLogsRequest, OpsServiceWatchJobLogsServerStream) error
+	DeleteJob(context.Context, *v1.DeleteJobRequest) (*v1.DeleteJobResponse, error)
 	// ---- live ----
 	WatchWorkspace(context.Context, *v1.WatchWorkspaceRequest, OpsServiceWatchWorkspaceServerStream) error
 }
@@ -577,6 +671,12 @@ func RegisterOpsServiceHandler(server *connect.Server, svc OpsServiceHandler) {
 		connect.Method{Spec: opsServiceBuildImageSpec(), Handler: adapter.buildImage},
 		connect.Method{Spec: opsServiceBuildImageStreamSpec(), Handler: adapter.buildImageStream},
 		connect.Method{Spec: opsServiceImportImageSpec(), Handler: adapter.importImage},
+		connect.Method{Spec: opsServiceCreateJobSpec(), Handler: adapter.createJob},
+		connect.Method{Spec: opsServiceListJobsSpec(), Handler: adapter.listJobs},
+		connect.Method{Spec: opsServiceGetJobSpec(), Handler: adapter.getJob},
+		connect.Method{Spec: opsServiceJobLogsSpec(), Handler: adapter.jobLogs},
+		connect.Method{Spec: opsServiceWatchJobLogsSpec(), Handler: adapter.watchJobLogs},
+		connect.Method{Spec: opsServiceDeleteJobSpec(), Handler: adapter.deleteJob},
 		connect.Method{Spec: opsServiceWatchWorkspaceSpec(), Handler: adapter.watchWorkspace},
 	)
 }
@@ -626,6 +726,21 @@ func (s OpsServiceBuildImageStreamServerStream) SendHeaders() error {
 
 // Send sends a response message to the client.
 func (s OpsServiceBuildImageStreamServerStream) Send(res *v1.BuildImageStreamEvent) error {
+	return s.stream.Send(res)
+}
+
+// OpsServiceWatchJobLogsServerStream is the server stream for the OpsService's WatchJobLogs RPC.
+type OpsServiceWatchJobLogsServerStream struct {
+	stream connect.ServerStream
+}
+
+// SendHeaders flushes the response headers without a message. The first Send does this implicitly.
+func (s OpsServiceWatchJobLogsServerStream) SendHeaders() error {
+	return s.stream.SendHeaders()
+}
+
+// Send sends a response message to the client.
+func (s OpsServiceWatchJobLogsServerStream) Send(res *v1.WatchJobLogsResponse) error {
 	return s.stream.Send(res)
 }
 
@@ -782,6 +897,30 @@ func (UnimplementedOpsServiceHandler) BuildImageStream(context.Context, *v1.Buil
 
 func (UnimplementedOpsServiceHandler) ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.ImportImage is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) CreateJob(context.Context, *v1.CreateJobRequest) (*v1.CreateJobResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.CreateJob is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) ListJobs(context.Context, *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.ListJobs is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) GetJob(context.Context, *v1.GetJobRequest) (*v1.GetJobResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.GetJob is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) JobLogs(context.Context, *v1.JobLogsRequest) (*v1.JobLogsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.JobLogs is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) WatchJobLogs(context.Context, *v1.WatchJobLogsRequest, OpsServiceWatchJobLogsServerStream) error {
+	return connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.WatchJobLogs is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) DeleteJob(context.Context, *v1.DeleteJobRequest) (*v1.DeleteJobResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.DeleteJob is not implemented")
 }
 
 func (UnimplementedOpsServiceHandler) WatchWorkspace(context.Context, *v1.WatchWorkspaceRequest, OpsServiceWatchWorkspaceServerStream) error {
@@ -1059,6 +1198,54 @@ func (c *opsServiceClient) BuildImageStream(ctx context.Context, req *v1.BuildIm
 func (c *opsServiceClient) ImportImage(ctx context.Context, req *v1.ImportImageRequest) (*v1.ImportImageResponse, error) {
 	var res v1.ImportImageResponse
 	if err := c.client.CallUnary(ctx, opsServiceImportImageSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) CreateJob(ctx context.Context, req *v1.CreateJobRequest) (*v1.CreateJobResponse, error) {
+	var res v1.CreateJobResponse
+	if err := c.client.CallUnary(ctx, opsServiceCreateJobSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) ListJobs(ctx context.Context, req *v1.ListJobsRequest) (*v1.ListJobsResponse, error) {
+	var res v1.ListJobsResponse
+	if err := c.client.CallUnary(ctx, opsServiceListJobsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) GetJob(ctx context.Context, req *v1.GetJobRequest) (*v1.GetJobResponse, error) {
+	var res v1.GetJobResponse
+	if err := c.client.CallUnary(ctx, opsServiceGetJobSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) JobLogs(ctx context.Context, req *v1.JobLogsRequest) (*v1.JobLogsResponse, error) {
+	var res v1.JobLogsResponse
+	if err := c.client.CallUnary(ctx, opsServiceJobLogsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) WatchJobLogs(ctx context.Context, req *v1.WatchJobLogsRequest) (OpsServiceWatchJobLogsClientStream, error) {
+	stream, err := c.client.CallServerStream(ctx, opsServiceWatchJobLogsSpec(), req)
+	if err != nil {
+		return OpsServiceWatchJobLogsClientStream{}, err
+	}
+	return OpsServiceWatchJobLogsClientStream{stream: stream}, nil
+}
+
+func (c *opsServiceClient) DeleteJob(ctx context.Context, req *v1.DeleteJobRequest) (*v1.DeleteJobResponse, error) {
+	var res v1.DeleteJobResponse
+	if err := c.client.CallUnary(ctx, opsServiceDeleteJobSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1464,6 +1651,74 @@ func (h opsServiceHandler) importImage(ctx context.Context, _ connect.Spec, stre
 		return err
 	}
 	res, err := h.svc.ImportImage(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) createJob(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.CreateJobRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.CreateJob(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) listJobs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ListJobsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListJobs(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) getJob(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.GetJobRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.GetJob(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) jobLogs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.JobLogsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.JobLogs(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) watchJobLogs(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.WatchJobLogsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	return h.svc.WatchJobLogs(ctx, &req, OpsServiceWatchJobLogsServerStream{stream: stream})
+}
+
+func (h opsServiceHandler) deleteJob(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.DeleteJobRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.DeleteJob(ctx, &req)
 	if err != nil {
 		return err
 	}

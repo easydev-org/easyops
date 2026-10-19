@@ -627,6 +627,105 @@ message ImportImageResponse {
   string log = 2;
 }
 
+// ---- jobs ----
+
+// JobInfo is one run-to-completion workload view.
+message JobInfo {
+  string name = 1;
+  string namespace = 2;
+  string image = 3;
+  // active | succeeded | failed (derived from the Job's status counters).
+  string state = 4;
+  // True once the Job reached a terminal state (succeeded or failed).
+  bool done = 5;
+  int32 succeeded = 6;
+  int32 failed = 7;
+  int32 active = 8;
+  // First failing container's reason/message (e.g. OOMKilled, ImagePullBackOff).
+  string reason = 9;
+  string message = 10;
+  string creator = 11;
+  string session = 12;
+  int64 created_at = 13; // unix millis
+  int64 finished_at = 14; // unix millis (0 while running)
+  // Exit code of the first container of the Job's pod (0 when unknown).
+  int32 exit_code = 15;
+}
+
+// JobVolumeMount mounts an existing PVC into the job container.
+message JobVolumeMount {
+  string name = 1;      // volume name (any stable label)
+  string claim = 2;     // PVC name
+  string mount_path = 3;
+  string sub_path = 4;  // optional
+  bool read_only = 5;
+}
+
+message CreateJobRequest {
+  // owner is opaque and unvalidated (creator annotation + List* filter).
+  string owner = 1;
+  // session optionally binds the job to a session (opaque; may be empty).
+  string session = 2;
+  string name = 3;
+  // namespace is the caller's tenant-internal namespace. "" = tenant default.
+  string namespace = 4;
+  string image = 5;
+  repeated string command = 6;
+  repeated string args = 7;
+  map<string, string> env = 8;
+  string cpu = 9;
+  string memory = 10;
+  // restart_policy is "Never" (default) or "OnFailure".
+  string restart_policy = 11;
+  // backoff_limit caps retries (default 0 for Never, 6 for OnFailure).
+  int32 backoff_limit = 12;
+  // active_deadline_seconds bounds the whole job (0 = no deadline).
+  int32 active_deadline_seconds = 13;
+  // ttl_seconds_after_finished auto-deletes the finished Job (0 = keep).
+  int32 ttl_seconds_after_finished = 14;
+  repeated JobVolumeMount volumes = 15;
+  map<string, string> node_selector = 16;
+  repeated string service_account = 17; // 0 or 1 entries (batch/v1 takes one)
+  bool privileged = 18; // requires an explicitly privileged runtime profile
+}
+message CreateJobResponse { JobInfo job = 1; }
+
+message ListJobsRequest { string owner = 1; }
+message ListJobsResponse { repeated JobInfo jobs = 1; }
+
+message GetJobRequest {
+  string owner = 1;
+  string name = 2;
+}
+message GetJobResponse { JobInfo job = 1; }
+
+message JobLogsRequest {
+  string owner = 1;
+  string name = 2;
+  string container = 3;  // "" = the job's single container
+  int32 tail_lines = 4;  // 0 = default (200)
+}
+message JobLogsResponse { string log = 1; }
+
+message WatchJobLogsRequest {
+  string owner = 1;
+  string name = 2;
+  string container = 3;
+  int32 tail_lines = 4;
+}
+message WatchJobLogsResponse {
+  string chunk = 1;
+  string state = 2; // running | done | failed
+}
+
+message DeleteJobRequest {
+  string owner = 1;
+  string name = 2;
+  // propagation: "background" (default) deletes dependents too.
+  string propagation = 3;
+}
+message DeleteJobResponse { bool ok = 1; }
+
 // OpsService is the easyops network surface.
 service OpsService {
   // ---- sandboxes ----
@@ -672,6 +771,17 @@ service OpsService {
   rpc BuildImage(BuildImageRequest) returns (BuildImageResponse);
   rpc BuildImageStream(BuildImageRequest) returns (stream BuildImageStreamEvent);
   rpc ImportImage(ImportImageRequest) returns (ImportImageResponse);
+
+  // ---- jobs (run-to-completion workloads) ----
+  // A Job runs a container to completion (batch/v1.Job) — e.g. a one-shot
+  // buildctl pod, a migration, or a test run. It is distinct from a Service
+  // (long-lived Deployment) and a Sandbox (a worker to talk to).
+  rpc CreateJob(CreateJobRequest) returns (CreateJobResponse);
+  rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);
+  rpc GetJob(GetJobRequest) returns (GetJobResponse);
+  rpc JobLogs(JobLogsRequest) returns (JobLogsResponse);
+  rpc WatchJobLogs(WatchJobLogsRequest) returns (stream WatchJobLogsResponse);
+  rpc DeleteJob(DeleteJobRequest) returns (DeleteJobResponse);
 
   // ---- live ----
   rpc WatchWorkspace(WatchWorkspaceRequest) returns (stream WatchWorkspaceResponse);

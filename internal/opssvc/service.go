@@ -18,6 +18,7 @@ import (
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
 	"github.com/easy-platform/easyops/internal/imagebuild"
+	"github.com/easy-platform/easyops/internal/jobmgr"
 	"github.com/easy-platform/easyops/internal/k8scheck"
 	"github.com/easy-platform/easyops/internal/runtimeprofiles"
 	"github.com/easy-platform/easyops/internal/sandboxmgr"
@@ -37,6 +38,8 @@ type Service struct {
 
 	services *servicesmgr.Client
 	builder  *imagebuild.Builder
+	// jobs is the run-to-completion (batch/v1.Job) backend (nil = unavailable).
+	jobs *jobmgr.Client
 
 	pvcStorageClass string
 	pvcDefaultSize  string
@@ -77,6 +80,8 @@ type Deps struct {
 	Services *servicesmgr.Client
 	// Builder is the image build/import backend (nil = unavailable).
 	Builder *imagebuild.Builder
+	// Jobs is the run-to-completion (batch/v1.Job) backend (nil = unavailable).
+	Jobs *jobmgr.Client
 	// PVCStorageClass is the deployment's storage class for CreatePVC (empty =
 	// the caller may pass any class).
 	PVCStorageClass string
@@ -121,6 +126,7 @@ func New(d Deps) *Service {
 		runtime:                d.Runtime,
 		defaultImage:           d.DefaultSandboxImage,
 		services:               d.Services,
+		jobs:                   d.Jobs,
 		builder:                d.Builder,
 		pvcStorageClass:        d.PVCStorageClass,
 		pvcDefaultSize:         d.PVCDefaultSize,
