@@ -42,6 +42,7 @@ func (s *Service) BuildImage(ctx context.Context, req *opsv1.BuildImageRequest) 
 		Repo:       m.GetRepo(),
 		Tag:        m.GetTag(),
 		BuildArgs:  m.GetBuildArgs(),
+		Cache:      cacheOptions(m.GetImageCache()),
 	})
 	if err != nil {
 		return nil, mapK8sErr(err)
@@ -51,6 +52,23 @@ func (s *Service) BuildImage(ctx context.Context, req *opsv1.BuildImageRequest) 
 
 // BuildImageStream builds like BuildImage but STREAMS the build output live, so
 // a client (the gateway, then the webui) can show the log as it is produced.
+// cacheOptions maps the wire type onto the builder's cache configuration.
+//
+// It is nil-safe: an absent `cache` field means "no registry cache", which is
+// the historical behaviour (daemon-local cache only).
+func cacheOptions(c *opsv1.CacheOptions) imagebuild.CacheOptions {
+	if c == nil {
+		return imagebuild.CacheOptions{}
+	}
+	return imagebuild.CacheOptions{
+		Enabled:    c.GetEnabled(),
+		Repo:       c.GetRepo(),
+		Tag:        c.GetTag(),
+		ImportOnly: c.GetImportOnly(),
+		Mode:       c.GetMode(),
+	}
+}
+
 func (s *Service) BuildImageStream(ctx context.Context, req *opsv1.BuildImageRequest, stream opsv1connect.OpsServiceBuildImageStreamServerStream) error {
 	if s.builder == nil {
 		return errNoImageBackend()
@@ -77,6 +95,7 @@ func (s *Service) BuildImageStream(ctx context.Context, req *opsv1.BuildImageReq
 		Repo:       m.GetRepo(),
 		Tag:        m.GetTag(),
 		BuildArgs:  m.GetBuildArgs(),
+		Cache:      cacheOptions(m.GetImageCache()),
 	}, func(chunk string) {
 		if sendErr != nil {
 			return

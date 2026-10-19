@@ -582,6 +582,28 @@ message DeleteSecretResponse { bool deleted = 1; }
 
 // BuildImage builds an image from a repo Dockerfile via buildkit and pushes it
 // to the deployment registry. The repo tarball is supplied by the caller.
+// CacheOptions controls registry cache import/export for one build.
+//
+// It is what makes the cache outlive the buildkitd that produced it: the
+// daemon's local layer cache dies with its pod/PVC, while an exported cache can
+// be re-imported by a fresh daemon (and shared between daemons).
+//
+// Note `--mount=type=cache` directories (go/pkg/mod, npm cache) are NOT part of
+// an export — only intermediate LAYERS are (mode=max). So an exported cache
+// saves re-running `RUN go mod download`, but not the unpacking of those
+// modules; a daemon with a shared PVC avoids that extra cost when it matters.
+message CacheOptions {
+  bool enabled = 1;
+  // repo is the registry repository holding the cache (default "<repo>-cache").
+  string repo = 2;
+  // tag is the cache tag (default: the image tag).
+  string tag = 3;
+  // import_only skips the export (read-only builds).
+  bool import_only = 4;
+  // mode is "max" (all intermediate layers, default) or "min".
+  string mode = 5;
+}
+
 message BuildImageRequest {
   string owner = 1;
   // archive is the repo tarball (tar.gz) to build from.
@@ -595,6 +617,9 @@ message BuildImageRequest {
   // Destination tag.
   string tag = 6;
   map<string, string> build_args = 7;
+  // image_cache enables REGISTRY cache import/export for this build (see
+  // CacheOptions). Absent = daemon-local cache only.
+  CacheOptions image_cache = 8;
 }
 message BuildImageResponse {
   string image_ref = 1;
@@ -610,6 +635,11 @@ message BuildImageStreamEvent {
   string state = 2;     // running | done | failed (final event = done|failed)
   string image_ref = 3;
   string error = 4;
+  // cache_hit / cache_imported are best-effort counters from the build graph,
+  // so a caller can tell a warm build from a cold one.
+  int32 cache_hits = 5;
+  int32 steps_total = 6;
+  int32 steps_cached = 7;
 }
 
 // ImportImage mirrors an upstream image into the deployment registry with a

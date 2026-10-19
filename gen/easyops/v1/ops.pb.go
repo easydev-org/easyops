@@ -5562,6 +5562,96 @@ func (x *DeleteSecretResponse) GetDeleted() bool {
 
 // BuildImage builds an image from a repo Dockerfile via buildkit and pushes it
 // to the deployment registry. The repo tarball is supplied by the caller.
+// CacheOptions controls registry cache import/export for one build.
+//
+// It is what makes the cache outlive the buildkitd that produced it: the
+// daemon's local layer cache dies with its pod/PVC, while an exported cache can
+// be re-imported by a fresh daemon (and shared between daemons).
+//
+// Note `--mount=type=cache` directories (go/pkg/mod, npm cache) are NOT part of
+// an export — only intermediate LAYERS are (mode=max). So an exported cache
+// saves re-running `RUN go mod download`, but not the unpacking of those
+// modules; a daemon with a shared PVC avoids that extra cost when it matters.
+type CacheOptions struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Enabled bool                   `protobuf:"varint,1,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	// repo is the registry repository holding the cache (default "<repo>-cache").
+	Repo string `protobuf:"bytes,2,opt,name=repo,proto3" json:"repo,omitempty"`
+	// tag is the cache tag (default: the image tag).
+	Tag string `protobuf:"bytes,3,opt,name=tag,proto3" json:"tag,omitempty"`
+	// import_only skips the export (read-only builds).
+	ImportOnly bool `protobuf:"varint,4,opt,name=import_only,json=importOnly,proto3" json:"import_only,omitempty"`
+	// mode is "max" (all intermediate layers, default) or "min".
+	Mode          string `protobuf:"bytes,5,opt,name=mode,proto3" json:"mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CacheOptions) Reset() {
+	*x = CacheOptions{}
+	mi := &file_easyops_v1_ops_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CacheOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CacheOptions) ProtoMessage() {}
+
+func (x *CacheOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_easyops_v1_ops_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CacheOptions.ProtoReflect.Descriptor instead.
+func (*CacheOptions) Descriptor() ([]byte, []int) {
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *CacheOptions) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+func (x *CacheOptions) GetRepo() string {
+	if x != nil {
+		return x.Repo
+	}
+	return ""
+}
+
+func (x *CacheOptions) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+func (x *CacheOptions) GetImportOnly() bool {
+	if x != nil {
+		return x.ImportOnly
+	}
+	return false
+}
+
+func (x *CacheOptions) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
 type BuildImageRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Owner string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
@@ -5574,15 +5664,18 @@ type BuildImageRequest struct {
 	// Destination repo path under the registry, e.g. "<org>/<image>".
 	Repo string `protobuf:"bytes,5,opt,name=repo,proto3" json:"repo,omitempty"`
 	// Destination tag.
-	Tag           string            `protobuf:"bytes,6,opt,name=tag,proto3" json:"tag,omitempty"`
-	BuildArgs     map[string]string `protobuf:"bytes,7,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Tag       string            `protobuf:"bytes,6,opt,name=tag,proto3" json:"tag,omitempty"`
+	BuildArgs map[string]string `protobuf:"bytes,7,rep,name=build_args,json=buildArgs,proto3" json:"build_args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// image_cache enables REGISTRY cache import/export for this build (see
+	// CacheOptions). Absent = daemon-local cache only.
+	ImageCache    *CacheOptions `protobuf:"bytes,8,opt,name=image_cache,json=imageCache,proto3" json:"image_cache,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BuildImageRequest) Reset() {
 	*x = BuildImageRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[83]
+	mi := &file_easyops_v1_ops_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5594,7 +5687,7 @@ func (x *BuildImageRequest) String() string {
 func (*BuildImageRequest) ProtoMessage() {}
 
 func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[83]
+	mi := &file_easyops_v1_ops_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5607,7 +5700,7 @@ func (x *BuildImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageRequest.ProtoReflect.Descriptor instead.
 func (*BuildImageRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{83}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *BuildImageRequest) GetOwner() string {
@@ -5659,6 +5752,13 @@ func (x *BuildImageRequest) GetBuildArgs() map[string]string {
 	return nil
 }
 
+func (x *BuildImageRequest) GetImageCache() *CacheOptions {
+	if x != nil {
+		return x.ImageCache
+	}
+	return nil
+}
+
 type BuildImageResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ImageRef      string                 `protobuf:"bytes,1,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
@@ -5669,7 +5769,7 @@ type BuildImageResponse struct {
 
 func (x *BuildImageResponse) Reset() {
 	*x = BuildImageResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[84]
+	mi := &file_easyops_v1_ops_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5681,7 +5781,7 @@ func (x *BuildImageResponse) String() string {
 func (*BuildImageResponse) ProtoMessage() {}
 
 func (x *BuildImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[84]
+	mi := &file_easyops_v1_ops_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5694,7 +5794,7 @@ func (x *BuildImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageResponse.ProtoReflect.Descriptor instead.
 func (*BuildImageResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{84}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *BuildImageResponse) GetImageRef() string {
@@ -5716,18 +5816,23 @@ func (x *BuildImageResponse) GetLog() string {
 // terminal state (done|failed), the image ref (on done) and the exit message
 // (on failed). `chunk` is the newly-produced stdout+stderr since the last event.
 type BuildImageStreamEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Chunk         string                 `protobuf:"bytes,1,opt,name=chunk,proto3" json:"chunk,omitempty"`
-	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // running | done | failed (final event = done|failed)
-	ImageRef      string                 `protobuf:"bytes,3,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Chunk    string                 `protobuf:"bytes,1,opt,name=chunk,proto3" json:"chunk,omitempty"`
+	State    string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"` // running | done | failed (final event = done|failed)
+	ImageRef string                 `protobuf:"bytes,3,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	Error    string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// cache_hit / cache_imported are best-effort counters from the build graph,
+	// so a caller can tell a warm build from a cold one.
+	CacheHits     int32 `protobuf:"varint,5,opt,name=cache_hits,json=cacheHits,proto3" json:"cache_hits,omitempty"`
+	StepsTotal    int32 `protobuf:"varint,6,opt,name=steps_total,json=stepsTotal,proto3" json:"steps_total,omitempty"`
+	StepsCached   int32 `protobuf:"varint,7,opt,name=steps_cached,json=stepsCached,proto3" json:"steps_cached,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *BuildImageStreamEvent) Reset() {
 	*x = BuildImageStreamEvent{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[85]
+	mi := &file_easyops_v1_ops_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5739,7 +5844,7 @@ func (x *BuildImageStreamEvent) String() string {
 func (*BuildImageStreamEvent) ProtoMessage() {}
 
 func (x *BuildImageStreamEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[85]
+	mi := &file_easyops_v1_ops_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5752,7 +5857,7 @@ func (x *BuildImageStreamEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BuildImageStreamEvent.ProtoReflect.Descriptor instead.
 func (*BuildImageStreamEvent) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{85}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *BuildImageStreamEvent) GetChunk() string {
@@ -5783,6 +5888,27 @@ func (x *BuildImageStreamEvent) GetError() string {
 	return ""
 }
 
+func (x *BuildImageStreamEvent) GetCacheHits() int32 {
+	if x != nil {
+		return x.CacheHits
+	}
+	return 0
+}
+
+func (x *BuildImageStreamEvent) GetStepsTotal() int32 {
+	if x != nil {
+		return x.StepsTotal
+	}
+	return 0
+}
+
+func (x *BuildImageStreamEvent) GetStepsCached() int32 {
+	if x != nil {
+		return x.StepsCached
+	}
+	return 0
+}
+
 // ImportImage mirrors an upstream image into the deployment registry with a
 // no-op `FROM <source>` rebuild.
 type ImportImageRequest struct {
@@ -5799,7 +5925,7 @@ type ImportImageRequest struct {
 
 func (x *ImportImageRequest) Reset() {
 	*x = ImportImageRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[86]
+	mi := &file_easyops_v1_ops_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5811,7 +5937,7 @@ func (x *ImportImageRequest) String() string {
 func (*ImportImageRequest) ProtoMessage() {}
 
 func (x *ImportImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[86]
+	mi := &file_easyops_v1_ops_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5824,7 +5950,7 @@ func (x *ImportImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportImageRequest.ProtoReflect.Descriptor instead.
 func (*ImportImageRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{86}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ImportImageRequest) GetOwner() string {
@@ -5879,7 +6005,7 @@ type ImportImageResponse struct {
 
 func (x *ImportImageResponse) Reset() {
 	*x = ImportImageResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[87]
+	mi := &file_easyops_v1_ops_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5891,7 +6017,7 @@ func (x *ImportImageResponse) String() string {
 func (*ImportImageResponse) ProtoMessage() {}
 
 func (x *ImportImageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[87]
+	mi := &file_easyops_v1_ops_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5904,7 +6030,7 @@ func (x *ImportImageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportImageResponse.ProtoReflect.Descriptor instead.
 func (*ImportImageResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{87}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *ImportImageResponse) GetImageRef() string {
@@ -5949,7 +6075,7 @@ type JobInfo struct {
 
 func (x *JobInfo) Reset() {
 	*x = JobInfo{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[88]
+	mi := &file_easyops_v1_ops_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5961,7 +6087,7 @@ func (x *JobInfo) String() string {
 func (*JobInfo) ProtoMessage() {}
 
 func (x *JobInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[88]
+	mi := &file_easyops_v1_ops_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5974,7 +6100,7 @@ func (x *JobInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobInfo.ProtoReflect.Descriptor instead.
 func (*JobInfo) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{88}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *JobInfo) GetName() string {
@@ -6096,7 +6222,7 @@ type JobVolumeMount struct {
 
 func (x *JobVolumeMount) Reset() {
 	*x = JobVolumeMount{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[89]
+	mi := &file_easyops_v1_ops_proto_msgTypes[90]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6108,7 +6234,7 @@ func (x *JobVolumeMount) String() string {
 func (*JobVolumeMount) ProtoMessage() {}
 
 func (x *JobVolumeMount) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[89]
+	mi := &file_easyops_v1_ops_proto_msgTypes[90]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6121,7 +6247,7 @@ func (x *JobVolumeMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobVolumeMount.ProtoReflect.Descriptor instead.
 func (*JobVolumeMount) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{89}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{90}
 }
 
 func (x *JobVolumeMount) GetName() string {
@@ -6192,7 +6318,7 @@ type CreateJobRequest struct {
 
 func (x *CreateJobRequest) Reset() {
 	*x = CreateJobRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[90]
+	mi := &file_easyops_v1_ops_proto_msgTypes[91]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6204,7 +6330,7 @@ func (x *CreateJobRequest) String() string {
 func (*CreateJobRequest) ProtoMessage() {}
 
 func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[90]
+	mi := &file_easyops_v1_ops_proto_msgTypes[91]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6217,7 +6343,7 @@ func (x *CreateJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobRequest.ProtoReflect.Descriptor instead.
 func (*CreateJobRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{90}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{91}
 }
 
 func (x *CreateJobRequest) GetOwner() string {
@@ -6355,7 +6481,7 @@ type CreateJobResponse struct {
 
 func (x *CreateJobResponse) Reset() {
 	*x = CreateJobResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[91]
+	mi := &file_easyops_v1_ops_proto_msgTypes[92]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6367,7 +6493,7 @@ func (x *CreateJobResponse) String() string {
 func (*CreateJobResponse) ProtoMessage() {}
 
 func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[91]
+	mi := &file_easyops_v1_ops_proto_msgTypes[92]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6380,7 +6506,7 @@ func (x *CreateJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateJobResponse.ProtoReflect.Descriptor instead.
 func (*CreateJobResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{91}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{92}
 }
 
 func (x *CreateJobResponse) GetJob() *JobInfo {
@@ -6399,7 +6525,7 @@ type ListJobsRequest struct {
 
 func (x *ListJobsRequest) Reset() {
 	*x = ListJobsRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[92]
+	mi := &file_easyops_v1_ops_proto_msgTypes[93]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6411,7 +6537,7 @@ func (x *ListJobsRequest) String() string {
 func (*ListJobsRequest) ProtoMessage() {}
 
 func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[92]
+	mi := &file_easyops_v1_ops_proto_msgTypes[93]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6424,7 +6550,7 @@ func (x *ListJobsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsRequest.ProtoReflect.Descriptor instead.
 func (*ListJobsRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{92}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{93}
 }
 
 func (x *ListJobsRequest) GetOwner() string {
@@ -6443,7 +6569,7 @@ type ListJobsResponse struct {
 
 func (x *ListJobsResponse) Reset() {
 	*x = ListJobsResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[93]
+	mi := &file_easyops_v1_ops_proto_msgTypes[94]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6455,7 +6581,7 @@ func (x *ListJobsResponse) String() string {
 func (*ListJobsResponse) ProtoMessage() {}
 
 func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[93]
+	mi := &file_easyops_v1_ops_proto_msgTypes[94]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6468,7 +6594,7 @@ func (x *ListJobsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJobsResponse.ProtoReflect.Descriptor instead.
 func (*ListJobsResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{93}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{94}
 }
 
 func (x *ListJobsResponse) GetJobs() []*JobInfo {
@@ -6488,7 +6614,7 @@ type GetJobRequest struct {
 
 func (x *GetJobRequest) Reset() {
 	*x = GetJobRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[94]
+	mi := &file_easyops_v1_ops_proto_msgTypes[95]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6500,7 +6626,7 @@ func (x *GetJobRequest) String() string {
 func (*GetJobRequest) ProtoMessage() {}
 
 func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[94]
+	mi := &file_easyops_v1_ops_proto_msgTypes[95]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6513,7 +6639,7 @@ func (x *GetJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobRequest.ProtoReflect.Descriptor instead.
 func (*GetJobRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{94}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{95}
 }
 
 func (x *GetJobRequest) GetOwner() string {
@@ -6539,7 +6665,7 @@ type GetJobResponse struct {
 
 func (x *GetJobResponse) Reset() {
 	*x = GetJobResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[95]
+	mi := &file_easyops_v1_ops_proto_msgTypes[96]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6551,7 +6677,7 @@ func (x *GetJobResponse) String() string {
 func (*GetJobResponse) ProtoMessage() {}
 
 func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[95]
+	mi := &file_easyops_v1_ops_proto_msgTypes[96]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6564,7 +6690,7 @@ func (x *GetJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetJobResponse.ProtoReflect.Descriptor instead.
 func (*GetJobResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{95}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{96}
 }
 
 func (x *GetJobResponse) GetJob() *JobInfo {
@@ -6586,7 +6712,7 @@ type JobLogsRequest struct {
 
 func (x *JobLogsRequest) Reset() {
 	*x = JobLogsRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[96]
+	mi := &file_easyops_v1_ops_proto_msgTypes[97]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6598,7 +6724,7 @@ func (x *JobLogsRequest) String() string {
 func (*JobLogsRequest) ProtoMessage() {}
 
 func (x *JobLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[96]
+	mi := &file_easyops_v1_ops_proto_msgTypes[97]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6611,7 +6737,7 @@ func (x *JobLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobLogsRequest.ProtoReflect.Descriptor instead.
 func (*JobLogsRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{96}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{97}
 }
 
 func (x *JobLogsRequest) GetOwner() string {
@@ -6651,7 +6777,7 @@ type JobLogsResponse struct {
 
 func (x *JobLogsResponse) Reset() {
 	*x = JobLogsResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[97]
+	mi := &file_easyops_v1_ops_proto_msgTypes[98]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6663,7 +6789,7 @@ func (x *JobLogsResponse) String() string {
 func (*JobLogsResponse) ProtoMessage() {}
 
 func (x *JobLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[97]
+	mi := &file_easyops_v1_ops_proto_msgTypes[98]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6676,7 +6802,7 @@ func (x *JobLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobLogsResponse.ProtoReflect.Descriptor instead.
 func (*JobLogsResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{97}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{98}
 }
 
 func (x *JobLogsResponse) GetLog() string {
@@ -6698,7 +6824,7 @@ type WatchJobLogsRequest struct {
 
 func (x *WatchJobLogsRequest) Reset() {
 	*x = WatchJobLogsRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[98]
+	mi := &file_easyops_v1_ops_proto_msgTypes[99]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6710,7 +6836,7 @@ func (x *WatchJobLogsRequest) String() string {
 func (*WatchJobLogsRequest) ProtoMessage() {}
 
 func (x *WatchJobLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[98]
+	mi := &file_easyops_v1_ops_proto_msgTypes[99]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6723,7 +6849,7 @@ func (x *WatchJobLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobLogsRequest.ProtoReflect.Descriptor instead.
 func (*WatchJobLogsRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{98}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{99}
 }
 
 func (x *WatchJobLogsRequest) GetOwner() string {
@@ -6764,7 +6890,7 @@ type WatchJobLogsResponse struct {
 
 func (x *WatchJobLogsResponse) Reset() {
 	*x = WatchJobLogsResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[99]
+	mi := &file_easyops_v1_ops_proto_msgTypes[100]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6776,7 +6902,7 @@ func (x *WatchJobLogsResponse) String() string {
 func (*WatchJobLogsResponse) ProtoMessage() {}
 
 func (x *WatchJobLogsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[99]
+	mi := &file_easyops_v1_ops_proto_msgTypes[100]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6789,7 +6915,7 @@ func (x *WatchJobLogsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchJobLogsResponse.ProtoReflect.Descriptor instead.
 func (*WatchJobLogsResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{99}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{100}
 }
 
 func (x *WatchJobLogsResponse) GetChunk() string {
@@ -6818,7 +6944,7 @@ type DeleteJobRequest struct {
 
 func (x *DeleteJobRequest) Reset() {
 	*x = DeleteJobRequest{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[100]
+	mi := &file_easyops_v1_ops_proto_msgTypes[101]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6830,7 +6956,7 @@ func (x *DeleteJobRequest) String() string {
 func (*DeleteJobRequest) ProtoMessage() {}
 
 func (x *DeleteJobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[100]
+	mi := &file_easyops_v1_ops_proto_msgTypes[101]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6843,7 +6969,7 @@ func (x *DeleteJobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteJobRequest.ProtoReflect.Descriptor instead.
 func (*DeleteJobRequest) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{100}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{101}
 }
 
 func (x *DeleteJobRequest) GetOwner() string {
@@ -6876,7 +7002,7 @@ type DeleteJobResponse struct {
 
 func (x *DeleteJobResponse) Reset() {
 	*x = DeleteJobResponse{}
-	mi := &file_easyops_v1_ops_proto_msgTypes[101]
+	mi := &file_easyops_v1_ops_proto_msgTypes[102]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -6888,7 +7014,7 @@ func (x *DeleteJobResponse) String() string {
 func (*DeleteJobResponse) ProtoMessage() {}
 
 func (x *DeleteJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_easyops_v1_ops_proto_msgTypes[101]
+	mi := &file_easyops_v1_ops_proto_msgTypes[102]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -6901,7 +7027,7 @@ func (x *DeleteJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteJobResponse.ProtoReflect.Descriptor instead.
 func (*DeleteJobResponse) Descriptor() ([]byte, []int) {
-	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{101}
+	return file_easyops_v1_ops_proto_rawDescGZIP(), []int{102}
 }
 
 func (x *DeleteJobResponse) GetOk() bool {
@@ -7365,7 +7491,14 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\"0\n" +
 	"\x14DeleteSecretResponse\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\bR\adeleted\"\xae\x02\n" +
+	"\adeleted\x18\x01 \x01(\bR\adeleted\"\x83\x01\n" +
+	"\fCacheOptions\x12\x18\n" +
+	"\aenabled\x18\x01 \x01(\bR\aenabled\x12\x12\n" +
+	"\x04repo\x18\x02 \x01(\tR\x04repo\x12\x10\n" +
+	"\x03tag\x18\x03 \x01(\tR\x03tag\x12\x1f\n" +
+	"\vimport_only\x18\x04 \x01(\bR\n" +
+	"importOnly\x12\x12\n" +
+	"\x04mode\x18\x05 \x01(\tR\x04mode\"\xe9\x02\n" +
 	"\x11BuildImageRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x18\n" +
 	"\aarchive\x18\x02 \x01(\fR\aarchive\x12\x1e\n" +
@@ -7376,18 +7509,25 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\x04repo\x18\x05 \x01(\tR\x04repo\x12\x10\n" +
 	"\x03tag\x18\x06 \x01(\tR\x03tag\x12K\n" +
 	"\n" +
-	"build_args\x18\a \x03(\v2,.easyops.v1.BuildImageRequest.BuildArgsEntryR\tbuildArgs\x1a<\n" +
+	"build_args\x18\a \x03(\v2,.easyops.v1.BuildImageRequest.BuildArgsEntryR\tbuildArgs\x129\n" +
+	"\vimage_cache\x18\b \x01(\v2\x18.easyops.v1.CacheOptionsR\n" +
+	"imageCache\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\x12BuildImageResponse\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12\x10\n" +
-	"\x03log\x18\x02 \x01(\tR\x03log\"v\n" +
+	"\x03log\x18\x02 \x01(\tR\x03log\"\xd9\x01\n" +
 	"\x15BuildImageStreamEvent\x12\x14\n" +
 	"\x05chunk\x18\x01 \x01(\tR\x05chunk\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1b\n" +
 	"\timage_ref\x18\x03 \x01(\tR\bimageRef\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xa4\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"cache_hits\x18\x05 \x01(\x05R\tcacheHits\x12\x1f\n" +
+	"\vsteps_total\x18\x06 \x01(\x05R\n" +
+	"stepsTotal\x12!\n" +
+	"\fsteps_cached\x18\a \x01(\x05R\vstepsCached\"\xa4\x01\n" +
 	"\x12ImportImageRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x12\n" +
@@ -7546,7 +7686,7 @@ func file_easyops_v1_ops_proto_rawDescGZIP() []byte {
 	return file_easyops_v1_ops_proto_rawDescData
 }
 
-var file_easyops_v1_ops_proto_msgTypes = make([]protoimpl.MessageInfo, 114)
+var file_easyops_v1_ops_proto_msgTypes = make([]protoimpl.MessageInfo, 115)
 var file_easyops_v1_ops_proto_goTypes = []any{
 	(*Sandbox)(nil),                      // 0: easyops.v1.Sandbox
 	(*CreateSandboxRequest)(nil),         // 1: easyops.v1.CreateSandboxRequest
@@ -7631,40 +7771,41 @@ var file_easyops_v1_ops_proto_goTypes = []any{
 	(*ListSecretsResponse)(nil),          // 80: easyops.v1.ListSecretsResponse
 	(*DeleteSecretRequest)(nil),          // 81: easyops.v1.DeleteSecretRequest
 	(*DeleteSecretResponse)(nil),         // 82: easyops.v1.DeleteSecretResponse
-	(*BuildImageRequest)(nil),            // 83: easyops.v1.BuildImageRequest
-	(*BuildImageResponse)(nil),           // 84: easyops.v1.BuildImageResponse
-	(*BuildImageStreamEvent)(nil),        // 85: easyops.v1.BuildImageStreamEvent
-	(*ImportImageRequest)(nil),           // 86: easyops.v1.ImportImageRequest
-	(*ImportImageResponse)(nil),          // 87: easyops.v1.ImportImageResponse
-	(*JobInfo)(nil),                      // 88: easyops.v1.JobInfo
-	(*JobVolumeMount)(nil),               // 89: easyops.v1.JobVolumeMount
-	(*CreateJobRequest)(nil),             // 90: easyops.v1.CreateJobRequest
-	(*CreateJobResponse)(nil),            // 91: easyops.v1.CreateJobResponse
-	(*ListJobsRequest)(nil),              // 92: easyops.v1.ListJobsRequest
-	(*ListJobsResponse)(nil),             // 93: easyops.v1.ListJobsResponse
-	(*GetJobRequest)(nil),                // 94: easyops.v1.GetJobRequest
-	(*GetJobResponse)(nil),               // 95: easyops.v1.GetJobResponse
-	(*JobLogsRequest)(nil),               // 96: easyops.v1.JobLogsRequest
-	(*JobLogsResponse)(nil),              // 97: easyops.v1.JobLogsResponse
-	(*WatchJobLogsRequest)(nil),          // 98: easyops.v1.WatchJobLogsRequest
-	(*WatchJobLogsResponse)(nil),         // 99: easyops.v1.WatchJobLogsResponse
-	(*DeleteJobRequest)(nil),             // 100: easyops.v1.DeleteJobRequest
-	(*DeleteJobResponse)(nil),            // 101: easyops.v1.DeleteJobResponse
-	nil,                                  // 102: easyops.v1.CreateSandboxRequest.EnvEntry
-	nil,                                  // 103: easyops.v1.SidecarSpec.EnvEntry
-	nil,                                  // 104: easyops.v1.ServiceInfo.EnvEntry
-	nil,                                  // 105: easyops.v1.DeployServiceRequest.EnvEntry
-	nil,                                  // 106: easyops.v1.DeployServiceRequest.NodeSelectorEntry
-	nil,                                  // 107: easyops.v1.ConfigMap.DataEntry
-	nil,                                  // 108: easyops.v1.PutConfigMapRequest.DataEntry
-	nil,                                  // 109: easyops.v1.Secret.DataEntry
-	nil,                                  // 110: easyops.v1.PutSecretRequest.DataEntry
-	nil,                                  // 111: easyops.v1.BuildImageRequest.BuildArgsEntry
-	nil,                                  // 112: easyops.v1.CreateJobRequest.EnvEntry
-	nil,                                  // 113: easyops.v1.CreateJobRequest.NodeSelectorEntry
+	(*CacheOptions)(nil),                 // 83: easyops.v1.CacheOptions
+	(*BuildImageRequest)(nil),            // 84: easyops.v1.BuildImageRequest
+	(*BuildImageResponse)(nil),           // 85: easyops.v1.BuildImageResponse
+	(*BuildImageStreamEvent)(nil),        // 86: easyops.v1.BuildImageStreamEvent
+	(*ImportImageRequest)(nil),           // 87: easyops.v1.ImportImageRequest
+	(*ImportImageResponse)(nil),          // 88: easyops.v1.ImportImageResponse
+	(*JobInfo)(nil),                      // 89: easyops.v1.JobInfo
+	(*JobVolumeMount)(nil),               // 90: easyops.v1.JobVolumeMount
+	(*CreateJobRequest)(nil),             // 91: easyops.v1.CreateJobRequest
+	(*CreateJobResponse)(nil),            // 92: easyops.v1.CreateJobResponse
+	(*ListJobsRequest)(nil),              // 93: easyops.v1.ListJobsRequest
+	(*ListJobsResponse)(nil),             // 94: easyops.v1.ListJobsResponse
+	(*GetJobRequest)(nil),                // 95: easyops.v1.GetJobRequest
+	(*GetJobResponse)(nil),               // 96: easyops.v1.GetJobResponse
+	(*JobLogsRequest)(nil),               // 97: easyops.v1.JobLogsRequest
+	(*JobLogsResponse)(nil),              // 98: easyops.v1.JobLogsResponse
+	(*WatchJobLogsRequest)(nil),          // 99: easyops.v1.WatchJobLogsRequest
+	(*WatchJobLogsResponse)(nil),         // 100: easyops.v1.WatchJobLogsResponse
+	(*DeleteJobRequest)(nil),             // 101: easyops.v1.DeleteJobRequest
+	(*DeleteJobResponse)(nil),            // 102: easyops.v1.DeleteJobResponse
+	nil,                                  // 103: easyops.v1.CreateSandboxRequest.EnvEntry
+	nil,                                  // 104: easyops.v1.SidecarSpec.EnvEntry
+	nil,                                  // 105: easyops.v1.ServiceInfo.EnvEntry
+	nil,                                  // 106: easyops.v1.DeployServiceRequest.EnvEntry
+	nil,                                  // 107: easyops.v1.DeployServiceRequest.NodeSelectorEntry
+	nil,                                  // 108: easyops.v1.ConfigMap.DataEntry
+	nil,                                  // 109: easyops.v1.PutConfigMapRequest.DataEntry
+	nil,                                  // 110: easyops.v1.Secret.DataEntry
+	nil,                                  // 111: easyops.v1.PutSecretRequest.DataEntry
+	nil,                                  // 112: easyops.v1.BuildImageRequest.BuildArgsEntry
+	nil,                                  // 113: easyops.v1.CreateJobRequest.EnvEntry
+	nil,                                  // 114: easyops.v1.CreateJobRequest.NodeSelectorEntry
 }
 var file_easyops_v1_ops_proto_depIdxs = []int32{
-	102, // 0: easyops.v1.CreateSandboxRequest.env:type_name -> easyops.v1.CreateSandboxRequest.EnvEntry
+	103, // 0: easyops.v1.CreateSandboxRequest.env:type_name -> easyops.v1.CreateSandboxRequest.EnvEntry
 	26,  // 1: easyops.v1.CreateSandboxRequest.volumes:type_name -> easyops.v1.VolumeMountSpec
 	0,   // 2: easyops.v1.CreateSandboxResponse.sandbox:type_name -> easyops.v1.Sandbox
 	0,   // 3: easyops.v1.ListSandboxesResponse.sandboxes:type_name -> easyops.v1.Sandbox
@@ -7673,9 +7814,9 @@ var file_easyops_v1_ops_proto_depIdxs = []int32{
 	27,  // 6: easyops.v1.WatchWorkspaceResponse.services:type_name -> easyops.v1.ServiceInfo
 	56,  // 7: easyops.v1.WatchWorkspaceResponse.pvcs:type_name -> easyops.v1.PVCInfo
 	18,  // 8: easyops.v1.ConfigMountSpec.items:type_name -> easyops.v1.KeyToPath
-	103, // 9: easyops.v1.SidecarSpec.env:type_name -> easyops.v1.SidecarSpec.EnvEntry
+	104, // 9: easyops.v1.SidecarSpec.env:type_name -> easyops.v1.SidecarSpec.EnvEntry
 	25,  // 10: easyops.v1.ServiceInfo.ports:type_name -> easyops.v1.ServicePortInfo
-	104, // 11: easyops.v1.ServiceInfo.env:type_name -> easyops.v1.ServiceInfo.EnvEntry
+	105, // 11: easyops.v1.ServiceInfo.env:type_name -> easyops.v1.ServiceInfo.EnvEntry
 	13,  // 12: easyops.v1.ServiceInfo.volumes:type_name -> easyops.v1.VolumeMountInfo
 	23,  // 13: easyops.v1.ServiceInfo.config_mounts:type_name -> easyops.v1.ConfigMountInfo
 	15,  // 14: easyops.v1.ServiceInfo.resources:type_name -> easyops.v1.ResourceSpec
@@ -7683,7 +7824,7 @@ var file_easyops_v1_ops_proto_depIdxs = []int32{
 	14,  // 16: easyops.v1.ServiceInfo.liveness_probe:type_name -> easyops.v1.ProbeSpec
 	14,  // 17: easyops.v1.ServiceInfo.startup_probe:type_name -> easyops.v1.ProbeSpec
 	22,  // 18: easyops.v1.ServiceInfo.rollout:type_name -> easyops.v1.RolloutSpec
-	105, // 19: easyops.v1.DeployServiceRequest.env:type_name -> easyops.v1.DeployServiceRequest.EnvEntry
+	106, // 19: easyops.v1.DeployServiceRequest.env:type_name -> easyops.v1.DeployServiceRequest.EnvEntry
 	24,  // 20: easyops.v1.DeployServiceRequest.services:type_name -> easyops.v1.ServicePortSpec
 	26,  // 21: easyops.v1.DeployServiceRequest.volumes:type_name -> easyops.v1.VolumeMountSpec
 	15,  // 22: easyops.v1.DeployServiceRequest.resources:type_name -> easyops.v1.ResourceSpec
@@ -7695,7 +7836,7 @@ var file_easyops_v1_ops_proto_depIdxs = []int32{
 	17,  // 28: easyops.v1.DeployServiceRequest.env_from:type_name -> easyops.v1.EnvFromSpec
 	19,  // 29: easyops.v1.DeployServiceRequest.config_mounts:type_name -> easyops.v1.ConfigMountSpec
 	20,  // 30: easyops.v1.DeployServiceRequest.sidecars:type_name -> easyops.v1.SidecarSpec
-	106, // 31: easyops.v1.DeployServiceRequest.node_selector:type_name -> easyops.v1.DeployServiceRequest.NodeSelectorEntry
+	107, // 31: easyops.v1.DeployServiceRequest.node_selector:type_name -> easyops.v1.DeployServiceRequest.NodeSelectorEntry
 	21,  // 32: easyops.v1.DeployServiceRequest.tolerations:type_name -> easyops.v1.TolerationSpec
 	27,  // 33: easyops.v1.DeployServiceResponse.service:type_name -> easyops.v1.ServiceInfo
 	27,  // 34: easyops.v1.ListServicesResponse.services:type_name -> easyops.v1.ServiceInfo
@@ -7708,110 +7849,111 @@ var file_easyops_v1_ops_proto_depIdxs = []int32{
 	56,  // 41: easyops.v1.CreatePVCResponse.pvc:type_name -> easyops.v1.PVCInfo
 	56,  // 42: easyops.v1.ListPVCsResponse.pvcs:type_name -> easyops.v1.PVCInfo
 	56,  // 43: easyops.v1.GetPVCResponse.pvc:type_name -> easyops.v1.PVCInfo
-	107, // 44: easyops.v1.ConfigMap.data:type_name -> easyops.v1.ConfigMap.DataEntry
-	108, // 45: easyops.v1.PutConfigMapRequest.data:type_name -> easyops.v1.PutConfigMapRequest.DataEntry
+	108, // 44: easyops.v1.ConfigMap.data:type_name -> easyops.v1.ConfigMap.DataEntry
+	109, // 45: easyops.v1.PutConfigMapRequest.data:type_name -> easyops.v1.PutConfigMapRequest.DataEntry
 	65,  // 46: easyops.v1.PutConfigMapResponse.configmap:type_name -> easyops.v1.ConfigMap
 	65,  // 47: easyops.v1.GetConfigMapResponse.configmap:type_name -> easyops.v1.ConfigMap
 	65,  // 48: easyops.v1.ListConfigMapsResponse.configmaps:type_name -> easyops.v1.ConfigMap
-	109, // 49: easyops.v1.Secret.data:type_name -> easyops.v1.Secret.DataEntry
-	110, // 50: easyops.v1.PutSecretRequest.data:type_name -> easyops.v1.PutSecretRequest.DataEntry
+	110, // 49: easyops.v1.Secret.data:type_name -> easyops.v1.Secret.DataEntry
+	111, // 50: easyops.v1.PutSecretRequest.data:type_name -> easyops.v1.PutSecretRequest.DataEntry
 	74,  // 51: easyops.v1.PutSecretResponse.secret:type_name -> easyops.v1.Secret
 	74,  // 52: easyops.v1.GetSecretResponse.secret:type_name -> easyops.v1.Secret
 	74,  // 53: easyops.v1.ListSecretsResponse.secrets:type_name -> easyops.v1.Secret
-	111, // 54: easyops.v1.BuildImageRequest.build_args:type_name -> easyops.v1.BuildImageRequest.BuildArgsEntry
-	112, // 55: easyops.v1.CreateJobRequest.env:type_name -> easyops.v1.CreateJobRequest.EnvEntry
-	89,  // 56: easyops.v1.CreateJobRequest.volumes:type_name -> easyops.v1.JobVolumeMount
-	113, // 57: easyops.v1.CreateJobRequest.node_selector:type_name -> easyops.v1.CreateJobRequest.NodeSelectorEntry
-	88,  // 58: easyops.v1.CreateJobResponse.job:type_name -> easyops.v1.JobInfo
-	88,  // 59: easyops.v1.ListJobsResponse.jobs:type_name -> easyops.v1.JobInfo
-	88,  // 60: easyops.v1.GetJobResponse.job:type_name -> easyops.v1.JobInfo
-	1,   // 61: easyops.v1.OpsService.CreateSandbox:input_type -> easyops.v1.CreateSandboxRequest
-	3,   // 62: easyops.v1.OpsService.ListSandboxes:input_type -> easyops.v1.ListSandboxesRequest
-	5,   // 63: easyops.v1.OpsService.GetSandbox:input_type -> easyops.v1.GetSandboxRequest
-	7,   // 64: easyops.v1.OpsService.ResolveSandbox:input_type -> easyops.v1.ResolveSandboxRequest
-	9,   // 65: easyops.v1.OpsService.DeleteSandbox:input_type -> easyops.v1.DeleteSandboxRequest
-	52,  // 66: easyops.v1.OpsService.SandboxLogs:input_type -> easyops.v1.SandboxLogsRequest
-	54,  // 67: easyops.v1.OpsService.WatchSandboxLogs:input_type -> easyops.v1.WatchSandboxLogsRequest
-	28,  // 68: easyops.v1.OpsService.DeployService:input_type -> easyops.v1.DeployServiceRequest
-	30,  // 69: easyops.v1.OpsService.ListServices:input_type -> easyops.v1.ListServicesRequest
-	32,  // 70: easyops.v1.OpsService.GetService:input_type -> easyops.v1.GetServiceRequest
-	34,  // 71: easyops.v1.OpsService.DeleteService:input_type -> easyops.v1.DeleteServiceRequest
-	36,  // 72: easyops.v1.OpsService.PauseService:input_type -> easyops.v1.PauseServiceRequest
-	38,  // 73: easyops.v1.OpsService.ResumeService:input_type -> easyops.v1.ResumeServiceRequest
-	40,  // 74: easyops.v1.OpsService.ScaleService:input_type -> easyops.v1.ScaleServiceRequest
-	42,  // 75: easyops.v1.OpsService.GetServiceManifest:input_type -> easyops.v1.GetServiceManifestRequest
-	44,  // 76: easyops.v1.OpsService.ApplyServiceManifest:input_type -> easyops.v1.ApplyServiceManifestRequest
-	46,  // 77: easyops.v1.OpsService.RollbackService:input_type -> easyops.v1.RollbackServiceRequest
-	48,  // 78: easyops.v1.OpsService.ServiceLogs:input_type -> easyops.v1.ServiceLogsRequest
-	50,  // 79: easyops.v1.OpsService.WatchServiceLogs:input_type -> easyops.v1.WatchServiceLogsRequest
-	57,  // 80: easyops.v1.OpsService.CreatePVC:input_type -> easyops.v1.CreatePVCRequest
-	59,  // 81: easyops.v1.OpsService.ListPVCs:input_type -> easyops.v1.ListPVCsRequest
-	61,  // 82: easyops.v1.OpsService.GetPVC:input_type -> easyops.v1.GetPVCRequest
-	63,  // 83: easyops.v1.OpsService.DeletePVC:input_type -> easyops.v1.DeletePVCRequest
-	66,  // 84: easyops.v1.OpsService.PutConfigMap:input_type -> easyops.v1.PutConfigMapRequest
-	68,  // 85: easyops.v1.OpsService.GetConfigMap:input_type -> easyops.v1.GetConfigMapRequest
-	70,  // 86: easyops.v1.OpsService.ListConfigMaps:input_type -> easyops.v1.ListConfigMapsRequest
-	72,  // 87: easyops.v1.OpsService.DeleteConfigMap:input_type -> easyops.v1.DeleteConfigMapRequest
-	75,  // 88: easyops.v1.OpsService.PutSecret:input_type -> easyops.v1.PutSecretRequest
-	77,  // 89: easyops.v1.OpsService.GetSecret:input_type -> easyops.v1.GetSecretRequest
-	79,  // 90: easyops.v1.OpsService.ListSecrets:input_type -> easyops.v1.ListSecretsRequest
-	81,  // 91: easyops.v1.OpsService.DeleteSecret:input_type -> easyops.v1.DeleteSecretRequest
-	83,  // 92: easyops.v1.OpsService.BuildImage:input_type -> easyops.v1.BuildImageRequest
-	83,  // 93: easyops.v1.OpsService.BuildImageStream:input_type -> easyops.v1.BuildImageRequest
-	86,  // 94: easyops.v1.OpsService.ImportImage:input_type -> easyops.v1.ImportImageRequest
-	90,  // 95: easyops.v1.OpsService.CreateJob:input_type -> easyops.v1.CreateJobRequest
-	92,  // 96: easyops.v1.OpsService.ListJobs:input_type -> easyops.v1.ListJobsRequest
-	94,  // 97: easyops.v1.OpsService.GetJob:input_type -> easyops.v1.GetJobRequest
-	96,  // 98: easyops.v1.OpsService.JobLogs:input_type -> easyops.v1.JobLogsRequest
-	98,  // 99: easyops.v1.OpsService.WatchJobLogs:input_type -> easyops.v1.WatchJobLogsRequest
-	100, // 100: easyops.v1.OpsService.DeleteJob:input_type -> easyops.v1.DeleteJobRequest
-	11,  // 101: easyops.v1.OpsService.WatchWorkspace:input_type -> easyops.v1.WatchWorkspaceRequest
-	2,   // 102: easyops.v1.OpsService.CreateSandbox:output_type -> easyops.v1.CreateSandboxResponse
-	4,   // 103: easyops.v1.OpsService.ListSandboxes:output_type -> easyops.v1.ListSandboxesResponse
-	6,   // 104: easyops.v1.OpsService.GetSandbox:output_type -> easyops.v1.GetSandboxResponse
-	8,   // 105: easyops.v1.OpsService.ResolveSandbox:output_type -> easyops.v1.ResolveSandboxResponse
-	10,  // 106: easyops.v1.OpsService.DeleteSandbox:output_type -> easyops.v1.DeleteSandboxResponse
-	53,  // 107: easyops.v1.OpsService.SandboxLogs:output_type -> easyops.v1.SandboxLogsResponse
-	55,  // 108: easyops.v1.OpsService.WatchSandboxLogs:output_type -> easyops.v1.WatchSandboxLogsResponse
-	29,  // 109: easyops.v1.OpsService.DeployService:output_type -> easyops.v1.DeployServiceResponse
-	31,  // 110: easyops.v1.OpsService.ListServices:output_type -> easyops.v1.ListServicesResponse
-	33,  // 111: easyops.v1.OpsService.GetService:output_type -> easyops.v1.GetServiceResponse
-	35,  // 112: easyops.v1.OpsService.DeleteService:output_type -> easyops.v1.DeleteServiceResponse
-	37,  // 113: easyops.v1.OpsService.PauseService:output_type -> easyops.v1.PauseServiceResponse
-	39,  // 114: easyops.v1.OpsService.ResumeService:output_type -> easyops.v1.ResumeServiceResponse
-	41,  // 115: easyops.v1.OpsService.ScaleService:output_type -> easyops.v1.ScaleServiceResponse
-	43,  // 116: easyops.v1.OpsService.GetServiceManifest:output_type -> easyops.v1.GetServiceManifestResponse
-	45,  // 117: easyops.v1.OpsService.ApplyServiceManifest:output_type -> easyops.v1.ApplyServiceManifestResponse
-	47,  // 118: easyops.v1.OpsService.RollbackService:output_type -> easyops.v1.RollbackServiceResponse
-	49,  // 119: easyops.v1.OpsService.ServiceLogs:output_type -> easyops.v1.ServiceLogsResponse
-	51,  // 120: easyops.v1.OpsService.WatchServiceLogs:output_type -> easyops.v1.WatchServiceLogsResponse
-	58,  // 121: easyops.v1.OpsService.CreatePVC:output_type -> easyops.v1.CreatePVCResponse
-	60,  // 122: easyops.v1.OpsService.ListPVCs:output_type -> easyops.v1.ListPVCsResponse
-	62,  // 123: easyops.v1.OpsService.GetPVC:output_type -> easyops.v1.GetPVCResponse
-	64,  // 124: easyops.v1.OpsService.DeletePVC:output_type -> easyops.v1.DeletePVCResponse
-	67,  // 125: easyops.v1.OpsService.PutConfigMap:output_type -> easyops.v1.PutConfigMapResponse
-	69,  // 126: easyops.v1.OpsService.GetConfigMap:output_type -> easyops.v1.GetConfigMapResponse
-	71,  // 127: easyops.v1.OpsService.ListConfigMaps:output_type -> easyops.v1.ListConfigMapsResponse
-	73,  // 128: easyops.v1.OpsService.DeleteConfigMap:output_type -> easyops.v1.DeleteConfigMapResponse
-	76,  // 129: easyops.v1.OpsService.PutSecret:output_type -> easyops.v1.PutSecretResponse
-	78,  // 130: easyops.v1.OpsService.GetSecret:output_type -> easyops.v1.GetSecretResponse
-	80,  // 131: easyops.v1.OpsService.ListSecrets:output_type -> easyops.v1.ListSecretsResponse
-	82,  // 132: easyops.v1.OpsService.DeleteSecret:output_type -> easyops.v1.DeleteSecretResponse
-	84,  // 133: easyops.v1.OpsService.BuildImage:output_type -> easyops.v1.BuildImageResponse
-	85,  // 134: easyops.v1.OpsService.BuildImageStream:output_type -> easyops.v1.BuildImageStreamEvent
-	87,  // 135: easyops.v1.OpsService.ImportImage:output_type -> easyops.v1.ImportImageResponse
-	91,  // 136: easyops.v1.OpsService.CreateJob:output_type -> easyops.v1.CreateJobResponse
-	93,  // 137: easyops.v1.OpsService.ListJobs:output_type -> easyops.v1.ListJobsResponse
-	95,  // 138: easyops.v1.OpsService.GetJob:output_type -> easyops.v1.GetJobResponse
-	97,  // 139: easyops.v1.OpsService.JobLogs:output_type -> easyops.v1.JobLogsResponse
-	99,  // 140: easyops.v1.OpsService.WatchJobLogs:output_type -> easyops.v1.WatchJobLogsResponse
-	101, // 141: easyops.v1.OpsService.DeleteJob:output_type -> easyops.v1.DeleteJobResponse
-	12,  // 142: easyops.v1.OpsService.WatchWorkspace:output_type -> easyops.v1.WatchWorkspaceResponse
-	102, // [102:143] is the sub-list for method output_type
-	61,  // [61:102] is the sub-list for method input_type
-	61,  // [61:61] is the sub-list for extension type_name
-	61,  // [61:61] is the sub-list for extension extendee
-	0,   // [0:61] is the sub-list for field type_name
+	112, // 54: easyops.v1.BuildImageRequest.build_args:type_name -> easyops.v1.BuildImageRequest.BuildArgsEntry
+	83,  // 55: easyops.v1.BuildImageRequest.image_cache:type_name -> easyops.v1.CacheOptions
+	113, // 56: easyops.v1.CreateJobRequest.env:type_name -> easyops.v1.CreateJobRequest.EnvEntry
+	90,  // 57: easyops.v1.CreateJobRequest.volumes:type_name -> easyops.v1.JobVolumeMount
+	114, // 58: easyops.v1.CreateJobRequest.node_selector:type_name -> easyops.v1.CreateJobRequest.NodeSelectorEntry
+	89,  // 59: easyops.v1.CreateJobResponse.job:type_name -> easyops.v1.JobInfo
+	89,  // 60: easyops.v1.ListJobsResponse.jobs:type_name -> easyops.v1.JobInfo
+	89,  // 61: easyops.v1.GetJobResponse.job:type_name -> easyops.v1.JobInfo
+	1,   // 62: easyops.v1.OpsService.CreateSandbox:input_type -> easyops.v1.CreateSandboxRequest
+	3,   // 63: easyops.v1.OpsService.ListSandboxes:input_type -> easyops.v1.ListSandboxesRequest
+	5,   // 64: easyops.v1.OpsService.GetSandbox:input_type -> easyops.v1.GetSandboxRequest
+	7,   // 65: easyops.v1.OpsService.ResolveSandbox:input_type -> easyops.v1.ResolveSandboxRequest
+	9,   // 66: easyops.v1.OpsService.DeleteSandbox:input_type -> easyops.v1.DeleteSandboxRequest
+	52,  // 67: easyops.v1.OpsService.SandboxLogs:input_type -> easyops.v1.SandboxLogsRequest
+	54,  // 68: easyops.v1.OpsService.WatchSandboxLogs:input_type -> easyops.v1.WatchSandboxLogsRequest
+	28,  // 69: easyops.v1.OpsService.DeployService:input_type -> easyops.v1.DeployServiceRequest
+	30,  // 70: easyops.v1.OpsService.ListServices:input_type -> easyops.v1.ListServicesRequest
+	32,  // 71: easyops.v1.OpsService.GetService:input_type -> easyops.v1.GetServiceRequest
+	34,  // 72: easyops.v1.OpsService.DeleteService:input_type -> easyops.v1.DeleteServiceRequest
+	36,  // 73: easyops.v1.OpsService.PauseService:input_type -> easyops.v1.PauseServiceRequest
+	38,  // 74: easyops.v1.OpsService.ResumeService:input_type -> easyops.v1.ResumeServiceRequest
+	40,  // 75: easyops.v1.OpsService.ScaleService:input_type -> easyops.v1.ScaleServiceRequest
+	42,  // 76: easyops.v1.OpsService.GetServiceManifest:input_type -> easyops.v1.GetServiceManifestRequest
+	44,  // 77: easyops.v1.OpsService.ApplyServiceManifest:input_type -> easyops.v1.ApplyServiceManifestRequest
+	46,  // 78: easyops.v1.OpsService.RollbackService:input_type -> easyops.v1.RollbackServiceRequest
+	48,  // 79: easyops.v1.OpsService.ServiceLogs:input_type -> easyops.v1.ServiceLogsRequest
+	50,  // 80: easyops.v1.OpsService.WatchServiceLogs:input_type -> easyops.v1.WatchServiceLogsRequest
+	57,  // 81: easyops.v1.OpsService.CreatePVC:input_type -> easyops.v1.CreatePVCRequest
+	59,  // 82: easyops.v1.OpsService.ListPVCs:input_type -> easyops.v1.ListPVCsRequest
+	61,  // 83: easyops.v1.OpsService.GetPVC:input_type -> easyops.v1.GetPVCRequest
+	63,  // 84: easyops.v1.OpsService.DeletePVC:input_type -> easyops.v1.DeletePVCRequest
+	66,  // 85: easyops.v1.OpsService.PutConfigMap:input_type -> easyops.v1.PutConfigMapRequest
+	68,  // 86: easyops.v1.OpsService.GetConfigMap:input_type -> easyops.v1.GetConfigMapRequest
+	70,  // 87: easyops.v1.OpsService.ListConfigMaps:input_type -> easyops.v1.ListConfigMapsRequest
+	72,  // 88: easyops.v1.OpsService.DeleteConfigMap:input_type -> easyops.v1.DeleteConfigMapRequest
+	75,  // 89: easyops.v1.OpsService.PutSecret:input_type -> easyops.v1.PutSecretRequest
+	77,  // 90: easyops.v1.OpsService.GetSecret:input_type -> easyops.v1.GetSecretRequest
+	79,  // 91: easyops.v1.OpsService.ListSecrets:input_type -> easyops.v1.ListSecretsRequest
+	81,  // 92: easyops.v1.OpsService.DeleteSecret:input_type -> easyops.v1.DeleteSecretRequest
+	84,  // 93: easyops.v1.OpsService.BuildImage:input_type -> easyops.v1.BuildImageRequest
+	84,  // 94: easyops.v1.OpsService.BuildImageStream:input_type -> easyops.v1.BuildImageRequest
+	87,  // 95: easyops.v1.OpsService.ImportImage:input_type -> easyops.v1.ImportImageRequest
+	91,  // 96: easyops.v1.OpsService.CreateJob:input_type -> easyops.v1.CreateJobRequest
+	93,  // 97: easyops.v1.OpsService.ListJobs:input_type -> easyops.v1.ListJobsRequest
+	95,  // 98: easyops.v1.OpsService.GetJob:input_type -> easyops.v1.GetJobRequest
+	97,  // 99: easyops.v1.OpsService.JobLogs:input_type -> easyops.v1.JobLogsRequest
+	99,  // 100: easyops.v1.OpsService.WatchJobLogs:input_type -> easyops.v1.WatchJobLogsRequest
+	101, // 101: easyops.v1.OpsService.DeleteJob:input_type -> easyops.v1.DeleteJobRequest
+	11,  // 102: easyops.v1.OpsService.WatchWorkspace:input_type -> easyops.v1.WatchWorkspaceRequest
+	2,   // 103: easyops.v1.OpsService.CreateSandbox:output_type -> easyops.v1.CreateSandboxResponse
+	4,   // 104: easyops.v1.OpsService.ListSandboxes:output_type -> easyops.v1.ListSandboxesResponse
+	6,   // 105: easyops.v1.OpsService.GetSandbox:output_type -> easyops.v1.GetSandboxResponse
+	8,   // 106: easyops.v1.OpsService.ResolveSandbox:output_type -> easyops.v1.ResolveSandboxResponse
+	10,  // 107: easyops.v1.OpsService.DeleteSandbox:output_type -> easyops.v1.DeleteSandboxResponse
+	53,  // 108: easyops.v1.OpsService.SandboxLogs:output_type -> easyops.v1.SandboxLogsResponse
+	55,  // 109: easyops.v1.OpsService.WatchSandboxLogs:output_type -> easyops.v1.WatchSandboxLogsResponse
+	29,  // 110: easyops.v1.OpsService.DeployService:output_type -> easyops.v1.DeployServiceResponse
+	31,  // 111: easyops.v1.OpsService.ListServices:output_type -> easyops.v1.ListServicesResponse
+	33,  // 112: easyops.v1.OpsService.GetService:output_type -> easyops.v1.GetServiceResponse
+	35,  // 113: easyops.v1.OpsService.DeleteService:output_type -> easyops.v1.DeleteServiceResponse
+	37,  // 114: easyops.v1.OpsService.PauseService:output_type -> easyops.v1.PauseServiceResponse
+	39,  // 115: easyops.v1.OpsService.ResumeService:output_type -> easyops.v1.ResumeServiceResponse
+	41,  // 116: easyops.v1.OpsService.ScaleService:output_type -> easyops.v1.ScaleServiceResponse
+	43,  // 117: easyops.v1.OpsService.GetServiceManifest:output_type -> easyops.v1.GetServiceManifestResponse
+	45,  // 118: easyops.v1.OpsService.ApplyServiceManifest:output_type -> easyops.v1.ApplyServiceManifestResponse
+	47,  // 119: easyops.v1.OpsService.RollbackService:output_type -> easyops.v1.RollbackServiceResponse
+	49,  // 120: easyops.v1.OpsService.ServiceLogs:output_type -> easyops.v1.ServiceLogsResponse
+	51,  // 121: easyops.v1.OpsService.WatchServiceLogs:output_type -> easyops.v1.WatchServiceLogsResponse
+	58,  // 122: easyops.v1.OpsService.CreatePVC:output_type -> easyops.v1.CreatePVCResponse
+	60,  // 123: easyops.v1.OpsService.ListPVCs:output_type -> easyops.v1.ListPVCsResponse
+	62,  // 124: easyops.v1.OpsService.GetPVC:output_type -> easyops.v1.GetPVCResponse
+	64,  // 125: easyops.v1.OpsService.DeletePVC:output_type -> easyops.v1.DeletePVCResponse
+	67,  // 126: easyops.v1.OpsService.PutConfigMap:output_type -> easyops.v1.PutConfigMapResponse
+	69,  // 127: easyops.v1.OpsService.GetConfigMap:output_type -> easyops.v1.GetConfigMapResponse
+	71,  // 128: easyops.v1.OpsService.ListConfigMaps:output_type -> easyops.v1.ListConfigMapsResponse
+	73,  // 129: easyops.v1.OpsService.DeleteConfigMap:output_type -> easyops.v1.DeleteConfigMapResponse
+	76,  // 130: easyops.v1.OpsService.PutSecret:output_type -> easyops.v1.PutSecretResponse
+	78,  // 131: easyops.v1.OpsService.GetSecret:output_type -> easyops.v1.GetSecretResponse
+	80,  // 132: easyops.v1.OpsService.ListSecrets:output_type -> easyops.v1.ListSecretsResponse
+	82,  // 133: easyops.v1.OpsService.DeleteSecret:output_type -> easyops.v1.DeleteSecretResponse
+	85,  // 134: easyops.v1.OpsService.BuildImage:output_type -> easyops.v1.BuildImageResponse
+	86,  // 135: easyops.v1.OpsService.BuildImageStream:output_type -> easyops.v1.BuildImageStreamEvent
+	88,  // 136: easyops.v1.OpsService.ImportImage:output_type -> easyops.v1.ImportImageResponse
+	92,  // 137: easyops.v1.OpsService.CreateJob:output_type -> easyops.v1.CreateJobResponse
+	94,  // 138: easyops.v1.OpsService.ListJobs:output_type -> easyops.v1.ListJobsResponse
+	96,  // 139: easyops.v1.OpsService.GetJob:output_type -> easyops.v1.GetJobResponse
+	98,  // 140: easyops.v1.OpsService.JobLogs:output_type -> easyops.v1.JobLogsResponse
+	100, // 141: easyops.v1.OpsService.WatchJobLogs:output_type -> easyops.v1.WatchJobLogsResponse
+	102, // 142: easyops.v1.OpsService.DeleteJob:output_type -> easyops.v1.DeleteJobResponse
+	12,  // 143: easyops.v1.OpsService.WatchWorkspace:output_type -> easyops.v1.WatchWorkspaceResponse
+	103, // [103:144] is the sub-list for method output_type
+	62,  // [62:103] is the sub-list for method input_type
+	62,  // [62:62] is the sub-list for extension type_name
+	62,  // [62:62] is the sub-list for extension extendee
+	0,   // [0:62] is the sub-list for field type_name
 }
 
 func init() { file_easyops_v1_ops_proto_init() }
@@ -7825,7 +7967,7 @@ func file_easyops_v1_ops_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_easyops_v1_ops_proto_rawDesc), len(file_easyops_v1_ops_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   114,
+			NumMessages:   115,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

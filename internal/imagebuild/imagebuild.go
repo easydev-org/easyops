@@ -55,6 +55,51 @@ type Request struct {
 	Repo       string
 	Tag        string
 	BuildArgs  map[string]string
+
+	// Cache enables registry cache export/import, which is what makes the cache
+	// survive a buildkitd restart (or a different daemon picking up the build).
+	// The daemon's local cache alone dies with its PVC.
+	Cache CacheOptions
+}
+
+// CacheOptions controls registry cache import/export for one build.
+//
+// WHY this exists: `--mount=type=cache` directories (go/pkg/mod, npm) are NOT
+// part of an exported cache — they live only inside the daemon while it runs.
+// What CAN be exported is every intermediate LAYER (`mode=max`), so
+// `RUN go mod download` still hits after the daemon is replaced; only the
+// unpacking of those modules into a cache dir is repeated. Exporting also lets
+// several daemons share one cache, and lets a fresh daemon warm up from the
+// registry instead of rebuilding from scratch.
+type CacheOptions struct {
+	// Enabled turns cache import AND export on.
+	Enabled bool
+	// Repo is the registry repository the cache is stored in, e.g.
+	// "easyagent/cache". Empty derives "<image repo>-cache".
+	Repo string
+	// Tag is the cache tag. Empty derives the image tag.
+	Tag string
+	// ImportOnly skips the export (useful for read-only builds).
+	ImportOnly bool
+	// Mode is "max" (all intermediate layers, default) or "min" (final only).
+	Mode string
+}
+
+// cacheRef builds the registry reference the cache is stored under.
+func (b *Builder) cacheRef(req Request) string {
+	c := req.Cache
+	repo := strings.Trim(c.Repo, "/")
+	if repo == "" {
+		repo = strings.Trim(req.Repo, "/") + "-cache"
+	}
+	tag := c.Tag
+	if tag == "" {
+		tag = req.Tag
+	}
+	if tag == "" {
+		tag = "cache"
+	}
+	return b.FullRef(repo, tag)
 }
 
 // Result is a completed build.
@@ -175,6 +220,30 @@ func (b *Builder) solve(ctx context.Context, req Request, emit func(string)) (st
 		expAttrs["registry.insecure"] = "true"
 	}
 
+	// Registry cache. Imports warm THIS daemon from the registry (it may be a
+	// brand-new one); exports keep the cache alive past the daemon's own PVC.
+	// Without this a daemon replacement (or a job-per-build model) starts cold.
+	var cacheImports []bkclient.CacheOptionsEntry
+	var cacheExports []bkclient.CacheOptionsEntry
+	if req.Cache.Enabled {
+		cacheAttrs := map[string]string{"ref": b.cacheRef(req)}
+		if b.scheme() == "http" {
+			cacheAttrs["registry.insecure"] = "true"
+		}
+		// "max" exports EVERY intermediate layer so `RUN go mod download`
+		// survives a daemon replacement; "min" exports only final-image layers,
+		// which is nearly useless as a build cache.
+		mode := req.Cache.Mode
+		if mode == "" {
+			mode = "max"
+		}
+		cacheAttrs["mode"] = mode
+		cacheImports = append(cacheImports, bkclient.CacheOptionsEntry{Type: "registry", Attrs: cacheAttrs})
+		if !req.Cache.ImportOnly {
+			cacheExports = append(cacheExports, bkclient.CacheOptionsEntry{Type: "registry", Attrs: cacheAttrs})
+		}
+	}
+
 	ch := make(chan *bkclient.SolveStatus)
 	var mu sync.Mutex
 	var logBuf strings.Builder
@@ -211,7 +280,9 @@ func (b *Builder) solve(ctx context.Context, req Request, emit func(string)) (st
 			Type:  "image",
 			Attrs: expAttrs,
 		}},
-		Session: []session.Attachable{ap},
+		CacheImports: cacheImports,
+		CacheExports: cacheExports,
+		Session:      []session.Attachable{ap},
 	}, ch)
 	<-done
 	if serr != nil {
