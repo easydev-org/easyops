@@ -103,9 +103,22 @@ func (c *Client) GetPVC(ctx context.Context, name string) (PVC, error) {
 	return v, nil
 }
 
-// ListPVCs returns every managed claim.
-func (c *Client) ListPVCs(ctx context.Context) ([]PVC, error) {
-	list, err := c.cs.CoreV1().PersistentVolumeClaims(c.namespace).List(ctx, metav1.ListOptions{LabelSelector: LabelPVC + "=1"})
+// ListPVCs returns claims in the managed namespace.
+//
+// By default only claims THIS manager created are returned (they carry the
+// workspace/pvc=1 label). That is the tenant-safe view: the platform's own
+// claims (postgres-data, garage-data, buildkitd-data, ...) are none of a
+// tenant's business, and a tenant has no way to tell them apart otherwise.
+//
+// includeAll drops the label filter and returns EVERY claim in the namespace.
+// A claim created outside this manager has no creator annotation, so it is
+// reported with an empty Creator — there is nothing to attribute it to.
+func (c *Client) ListPVCs(ctx context.Context, includeAll bool) ([]PVC, error) {
+	opts := metav1.ListOptions{LabelSelector: LabelPVC + "=1"}
+	if includeAll {
+		opts = metav1.ListOptions{}
+	}
+	list, err := c.cs.CoreV1().PersistentVolumeClaims(c.namespace).List(ctx, opts)
 	if err != nil {
 		return nil, err
 	}

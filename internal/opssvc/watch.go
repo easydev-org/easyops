@@ -100,7 +100,7 @@ func (s *Service) buildWatchFrame(ctx context.Context, owner string, snapshot, s
 	} else {
 		frame.Services = svcs
 	}
-	if pvcs, err := s.listPVCs(ctx, owner); err != nil {
+	if pvcs, err := s.listPVCs(ctx, owner, false); err != nil {
 		log.Printf("warn: WatchWorkspace: list pvcs: %v", err)
 	} else {
 		frame.Pvcs = pvcs

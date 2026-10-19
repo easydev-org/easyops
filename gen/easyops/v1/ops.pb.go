@@ -4347,8 +4347,21 @@ func (x *CreatePVCResponse) GetPvc() *PVCInfo {
 }
 
 type ListPVCsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Owner         string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Owner string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
+	// include_all lists EVERY claim in the namespace, not only the ones easyops
+	// created (those carry the workspace/pvc=1 label).
+	//
+	// The default (false) is the tenant-safe view: a tenant is shown its own
+	// claims, never the platform's (postgres-data, garage-data, ...). But that
+	// made `ops-list-pvcs` report "none" in a namespace full of claims, which
+	// sends a reader looking for a bug. This flag is the explicit way to ask for
+	// the whole picture.
+	//
+	// Claims created outside easyops have no creator annotation, so they cannot
+	// be attributed to a tenant; when include_all is set the owner filter is
+	// SKIPPED for them (there is nothing to match against).
+	IncludeAll    bool `protobuf:"varint,2,opt,name=include_all,json=includeAll,proto3" json:"include_all,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4388,6 +4401,13 @@ func (x *ListPVCsRequest) GetOwner() string {
 		return x.Owner
 	}
 	return ""
+}
+
+func (x *ListPVCsRequest) GetIncludeAll() bool {
+	if x != nil {
+		return x.IncludeAll
+	}
+	return false
 }
 
 type ListPVCsResponse struct {
@@ -7451,9 +7471,11 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\rstorage_class\x18\x04 \x01(\tR\fstorageClass\x12\x1c\n" +
 	"\tnamespace\x18\x05 \x01(\tR\tnamespace\":\n" +
 	"\x11CreatePVCResponse\x12%\n" +
-	"\x03pvc\x18\x01 \x01(\v2\x13.easyops.v1.PVCInfoR\x03pvc\"'\n" +
+	"\x03pvc\x18\x01 \x01(\v2\x13.easyops.v1.PVCInfoR\x03pvc\"H\n" +
 	"\x0fListPVCsRequest\x12\x14\n" +
-	"\x05owner\x18\x01 \x01(\tR\x05owner\";\n" +
+	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x1f\n" +
+	"\vinclude_all\x18\x02 \x01(\bR\n" +
+	"includeAll\";\n" +
 	"\x10ListPVCsResponse\x12'\n" +
 	"\x04pvcs\x18\x01 \x03(\v2\x13.easyops.v1.PVCInfoR\x04pvcs\"9\n" +
 	"\rGetPVCRequest\x12\x14\n" +

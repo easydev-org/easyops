@@ -530,7 +530,22 @@ message CreatePVCRequest {
 }
 message CreatePVCResponse { PVCInfo pvc = 1; }
 
-message ListPVCsRequest { string owner = 1; }
+message ListPVCsRequest {
+  string owner = 1;
+  // include_all lists EVERY claim in the namespace, not only the ones easyops
+  // created (those carry the workspace/pvc=1 label).
+  //
+  // The default (false) is the tenant-safe view: a tenant is shown its own
+  // claims, never the platform's (postgres-data, garage-data, ...). But that
+  // made `ops-list-pvcs` report "none" in a namespace full of claims, which
+  // sends a reader looking for a bug. This flag is the explicit way to ask for
+  // the whole picture.
+  //
+  // Claims created outside easyops have no creator annotation, so they cannot
+  // be attributed to a tenant; when include_all is set the owner filter is
+  // SKIPPED for them (there is nothing to match against).
+  bool include_all = 2;
+}
 message ListPVCsResponse { repeated PVCInfo pvcs = 1; }
 
 message GetPVCRequest {

@@ -123,6 +123,58 @@ func TestBoundPVCSkipsEvents(t *testing.T) {
 	}
 }
 
+// foreignPVC is a claim that easyops did NOT create: no workspace/pvc label and
+// no creator annotation (the platform's own postgres-data, garage-data, ...).
+func foreignPVC(name string) *corev1.PersistentVolumeClaim {
+	p := pendingPVC(name)
+	p.Labels = nil
+	p.Annotations = nil
+	return p
+}
+
+// TestListPVCDefaultsToManagedOnly pins the tenant-safe default: a tenant must
+// not be shown the platform's own claims.
+func TestListPVCDefaultsToManagedOnly(t *testing.T) {
+	cs := fake.NewSimpleClientset(pendingPVC("mine"), foreignPVC("postgres-data"))
+	c := NewWithClientset(cs, Config{Namespace: "dev"})
+
+	got, err := c.ListPVCs(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Name != "mine" {
+		names := make([]string, len(got))
+		for i, p := range got {
+			names[i] = p.Name
+		}
+		t.Fatalf("default list = %v, want only [mine]", names)
+	}
+}
+
+// TestListPVCIncludeAll: the explicit opt-in must return everything, including
+// claims created outside easyops (which have no creator).
+func TestListPVCIncludeAll(t *testing.T) {
+	cs := fake.NewSimpleClientset(pendingPVC("mine"), foreignPVC("postgres-data"))
+	c := NewWithClientset(cs, Config{Namespace: "dev"})
+
+	got, err := c.ListPVCs(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("includeAll list = %d claims, want 2", len(got))
+	}
+	byName := map[string]PVC{}
+	for _, p := range got {
+		byName[p.Name] = p
+	}
+	if f, ok := byName["postgres-data"]; !ok {
+		t.Error("includeAll must return the foreign claim")
+	} else if f.Creator != "" {
+		t.Errorf("a foreign claim has no creator, got %q", f.Creator)
+	}
+}
+
 func containsStr(h, sub string) bool {
 	return len(sub) == 0 || (len(h) >= len(sub) && indexOfStr(h, sub) >= 0)
 }

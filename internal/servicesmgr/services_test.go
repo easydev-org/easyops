@@ -207,7 +207,7 @@ func TestPVCreateListDelete(t *testing.T) {
 	if _, err := c.CreatePVC(ctx, "data", "1Gi", "workspace-local", "other", ""); err == nil {
 		t.Fatal("expected foreign-creator refusal")
 	}
-	if list, _ := c.ListPVCs(ctx); len(list) != 1 {
+	if list, _ := c.ListPVCs(ctx, false); len(list) != 1 {
 		t.Fatalf("list = %+v", list)
 	}
 	if ok, err := c.DeletePVC(ctx, "data"); err != nil || !ok {

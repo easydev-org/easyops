@@ -39,7 +39,7 @@ func (s *Service) CreatePVC(ctx context.Context, req *opsv1.CreatePVCRequest) (*
 // claim a service depends on even when it is owned by another tenant. Get/Create/
 // Delete remain owner-scoped.
 func (s *Service) ListPVCs(ctx context.Context, req *opsv1.ListPVCsRequest) (*opsv1.ListPVCsResponse, error) {
-	out, err := s.listPVCs(ctx, "")
+	out, err := s.listPVCs(ctx, "", req.GetIncludeAll())
 	if err != nil {
 		return nil, err
 	}
@@ -49,16 +49,28 @@ func (s *Service) ListPVCs(ctx context.Context, req *opsv1.ListPVCsRequest) (*op
 // listPVCs returns the claims visible to `owner` (empty owner = no filter). It
 // returns an empty list (not an error) when the services backend is not
 // configured.
-func (s *Service) listPVCs(ctx context.Context, owner string) ([]*opsv1.PVCInfo, error) {
+//
+// includeAll widens the MANAGER-level filter from "claims easyops created" to
+// "every claim in the namespace". The owner filter below is then skipped for
+// claims that have no creator (they were made outside easyops, so nothing can
+// be matched): showing them as "unowned" is the whole point of includeAll.
+func (s *Service) listPVCs(ctx context.Context, owner string, includeAll bool) ([]*opsv1.PVCInfo, error) {
 	if s.services == nil {
 		return nil, nil
 	}
-	pvcs, err := s.services.ListPVCs(ctx)
+	pvcs, err := s.services.ListPVCs(ctx, includeAll)
 	if err != nil {
 		return nil, mapK8sErr(err)
 	}
 	out := make([]*opsv1.PVCInfo, 0, len(pvcs))
 	for _, p := range pvcs {
+		// A claim with no creator (created outside easyops) cannot be attributed,
+		// so it bypasses the owner filter — but ONLY when the caller explicitly
+		// asked for everything.
+		if p.Creator == "" && includeAll {
+			out = append(out, toPVCInfo(p))
+			continue
+		}
 		if !owned(p.Creator, owner) {
 			continue
 		}
