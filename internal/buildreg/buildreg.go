@@ -22,6 +22,7 @@ package buildreg
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 )
@@ -45,18 +46,27 @@ func (s State) Terminal() bool {
 	return false
 }
 
-// DefaultMaxRecords caps the registry. A build record holds a bounded log
-// tail, so this is the memory ceiling: MaxRecords * LogTailBytes.
-//
-// 1000 records x 4 KiB ~= 4 MiB worst case, which is a sane bound for a
-// PROCESS-LOCAL view of recent builds. Raise it only with that arithmetic in
-// mind: the log tail is what dominates, not the record fields.
+// DefaultMaxRecords caps the registry (metadata only — logs are capped
+// separately, see LogCapBytes / LogBudgetBytes).
 const DefaultMaxRecords = 1000
 
-// LogTailBytes bounds the log kept per record. A build log is unbounded (a
-// large Go build can emit megabytes); keeping the TAIL is what matters because
-// a failure explains itself at the end.
-const LogTailBytes = 4096
+// LogCapBytes bounds ONE build's stored log. A build log is unbounded (a large
+// Go build can emit megabytes), so it is truncated here and the record marks
+// itself truncated — the caller is never silently given a partial log.
+//
+// The HEAD is kept, not the tail: a truncated log is read top-down, and the
+// interesting part of a failure (the exit status) is usually near the end, but
+// pagination is only coherent if offset 0 is the real offset 0.
+const LogCapBytes = 1 << 20 // 1 MiB
+
+// LogBudgetBytes bounds the TOTAL log memory across all records.
+//
+// This is the number that actually protects the process. A per-record cap alone
+// would allow MaxRecords*LogCapBytes = 1000 * 1 MiB = 1 GiB, which would OOM a
+// pod that has no memory limit set. The budget is enforced by dropping the logs
+// of the OLDEST FINISHED records first (their metadata stays, so List/Get still
+// report what happened). A running build's log is never dropped.
+const LogBudgetBytes = 64 << 20 // 64 MiB
 
 // Record is one build.
 type Record struct {
@@ -68,7 +78,15 @@ type Record struct {
 	State State
 	Error string
 	// Log holds the most recent LogTailBytes of build output.
-	Log        string
+	Log string
+	// LogBytes is the FULL size of the build's output, even when Log was
+	// truncated to LogCapBytes.
+	LogBytes int64
+	// LogTruncated reports that Log holds only the first part of the output.
+	LogTruncated bool
+	// LogDropped reports that the log was RELEASED to stay within the global
+	// budget (the build finished long ago). Metadata is still available.
+	LogDropped bool
 	StartedAt  int64 // unix millis
 	FinishedAt int64 // unix millis (0 while running)
 	CacheUsed  bool
@@ -92,7 +110,9 @@ type Registry struct {
 	order   []string // ids, oldest first (eviction order)
 	byID    map[string]*Record
 	max     int
-	tailCap int
+	logCap  int
+	budget  int
+	logUsed int
 }
 
 // New builds a registry holding at most max records (<=0 uses the default).
@@ -100,7 +120,7 @@ func New(max int) *Registry {
 	if max <= 0 {
 		max = DefaultMaxRecords
 	}
-	return &Registry{byID: map[string]*Record{}, max: max, tailCap: LogTailBytes}
+	return &Registry{byID: map[string]*Record{}, max: max, logCap: LogCapBytes, budget: LogBudgetBytes}
 }
 
 // Start registers a RUNNING build and returns its id plus a context that
@@ -149,7 +169,8 @@ func (g *Registry) Finish(id string, imageRef string, err error) {
 	rec.Image = imageRef
 }
 
-// AppendLog adds output, keeping only the last tailCap bytes.
+// AppendLog adds output, keeping at most logCap bytes per record and enforcing
+// the global log budget.
 func (g *Registry) AppendLog(id, chunk string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -157,9 +178,51 @@ func (g *Registry) AppendLog(id, chunk string) {
 	if !ok {
 		return
 	}
+	rec.LogBytes += int64(len(chunk))
+	// Once a record is truncated we stop buffering entirely: the head is already
+	// full and appending would only re-truncate. LogBytes keeps counting so the
+	// caller can see how much output there really was.
+	if rec.LogTruncated {
+		return
+	}
+	room := g.logCap - len(rec.Log)
+	if room <= 0 {
+		rec.LogTruncated = true
+		return
+	}
+	if len(chunk) > room {
+		rec.Log += chunk[:room]
+		rec.LogTruncated = true
+		g.logUsed += room
+		g.enforceBudgetLocked()
+		return
+	}
 	rec.Log += chunk
-	if len(rec.Log) > g.tailCap {
-		rec.Log = rec.Log[len(rec.Log)-g.tailCap:]
+	g.logUsed += len(chunk)
+	g.enforceBudgetLocked()
+}
+
+// enforceBudgetLocked drops the logs of the oldest FINISHED records until the
+// total is within budget. Metadata survives, so List/Get still report what
+// happened; only the log body is released.
+func (g *Registry) enforceBudgetLocked() {
+	if g.logUsed <= g.budget {
+		return
+	}
+	for _, id := range g.order { // oldest first
+		if g.logUsed <= g.budget {
+			return
+		}
+		rec, ok := g.byID[id]
+		if !ok || rec.Log == "" {
+			continue
+		}
+		if rec.State == StateRunning {
+			continue // never release a live build's log
+		}
+		g.logUsed -= len(rec.Log)
+		rec.Log = ""
+		rec.LogDropped = true
 	}
 }
 
@@ -172,6 +235,76 @@ func (g *Registry) Get(id string) (Record, bool) {
 		return Record{}, false
 	}
 	return rec.Snapshot(), true
+}
+
+// LogPage is a window of a build's log, by LINE.
+type LogPage struct {
+	// Lines are the requested lines, WITHOUT line numbers (the caller formats
+	// them: numbering is a presentation concern, and a client may want raw text).
+	Lines []string
+	// FirstLine is the 1-based number of Lines[0], so the caller can print
+	// "12: ..." for a page that starts at line 12.
+	FirstLine int
+	// TotalLines is the number of lines the record holds.
+	TotalLines int
+	// Truncated reports that the BUILD's output exceeded the record's cap, so
+	// there is more output than this record can ever show.
+	Truncated bool
+	// Dropped reports that the log was released to stay within the global
+	// budget (old finished build); there is nothing to read.
+	Dropped bool
+}
+
+// DefaultLogLines / MaxLogLines bound a log page. The default keeps a tool
+// response small; the max stops a caller from asking for a 1 MiB wall of text
+// in one shot (it can still page through it).
+const (
+	DefaultLogLines = 200
+	MaxLogLines     = 1000
+)
+
+// LogPage returns a window of a build's log by line number.
+//
+// offset is 0-based ("skip this many lines"); limit<=0 uses DefaultLogLines and
+// is capped at MaxLogLines. Lines are returned WITHOUT numbers so a non-text
+// consumer (a script) is not forced to strip a prefix; the page carries
+// FirstLine so a human-facing renderer can number them.
+func (g *Registry) LogPage(id string, offset, limit int) (LogPage, bool) {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	rec, ok := g.byID[id]
+	if !ok {
+		return LogPage{}, false
+	}
+	page := LogPage{Truncated: rec.LogTruncated, Dropped: rec.LogDropped}
+	if rec.Log == "" {
+		return page, true
+	}
+	if limit <= 0 {
+		limit = DefaultLogLines
+	}
+	if limit > MaxLogLines {
+		limit = MaxLogLines
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	// Split without a trailing empty element for a log that ends in "\n".
+	all := strings.Split(strings.TrimSuffix(rec.Log, "\n"), "\n")
+	if len(all) == 1 && all[0] == "" {
+		all = nil
+	}
+	page.TotalLines = len(all)
+	if offset >= len(all) {
+		return page, true
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page.Lines = all[offset:end]
+	page.FirstLine = offset + 1
+	return page, true
 }
 
 // List returns builds newest-first, filtered by owner ("" = all). limit<=0
@@ -248,6 +381,9 @@ func (g *Registry) evictLocked() {
 			if rec.State == StateRunning {
 				continue // never drop a live build
 			}
+			// Reclaim the log's share of the budget, or the accounting leaks and
+			// the budget eventually rejects every new log.
+			g.logUsed -= len(rec.Log)
 			delete(g.byID, g.order[i])
 			g.order = append(g.order[:i], g.order[i+1:]...)
 			dropped = true

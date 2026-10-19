@@ -5995,8 +5995,9 @@ type BuildRecord struct {
 	State string `protobuf:"bytes,6,opt,name=state,proto3" json:"state,omitempty"`
 	// error is the failure message (state=failed) or the cancel reason.
 	Error string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
-	// log holds the TAIL of the build output (bounded; a failure explains itself
-	// at the end).
+	// log holds the build output, truncated to the FIRST LogCapBytes (1 MiB) when
+	// the output is longer; log_truncated says so. The HEAD is kept rather than
+	// the tail so that line offsets stay coherent when paging.
 	Log        string `protobuf:"bytes,8,opt,name=log,proto3" json:"log,omitempty"`
 	StartedAt  int64  `protobuf:"varint,9,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`     // unix millis
 	FinishedAt int64  `protobuf:"varint,10,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"` // unix millis (0 while running)
@@ -6004,7 +6005,18 @@ type BuildRecord struct {
 	CacheUsed bool `protobuf:"varint,11,opt,name=cache_used,json=cacheUsed,proto3" json:"cache_used,omitempty"`
 	// durability is always "memory" today, so a client can never mistake a
 	// record for durable history.
-	Durability    string `protobuf:"bytes,12,opt,name=durability,proto3" json:"durability,omitempty"`
+	Durability string `protobuf:"bytes,12,opt,name=durability,proto3" json:"durability,omitempty"`
+	// log_bytes is the FULL size of the build output, which can exceed the bytes
+	// actually kept (see log_truncated).
+	LogBytes int64 `protobuf:"varint,13,opt,name=log_bytes,json=logBytes,proto3" json:"log_bytes,omitempty"`
+	// log_truncated reports that the record holds only the FIRST LogCapBytes of
+	// the output (1 MiB). The caller is told rather than silently given a partial
+	// log.
+	LogTruncated bool `protobuf:"varint,14,opt,name=log_truncated,json=logTruncated,proto3" json:"log_truncated,omitempty"`
+	// log_dropped reports that the log was released to stay within the global
+	// memory budget (an old finished build). Metadata is still available; the log
+	// body is not.
+	LogDropped    bool `protobuf:"varint,15,opt,name=log_dropped,json=logDropped,proto3" json:"log_dropped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6121,6 +6133,27 @@ func (x *BuildRecord) GetDurability() string {
 		return x.Durability
 	}
 	return ""
+}
+
+func (x *BuildRecord) GetLogBytes() int64 {
+	if x != nil {
+		return x.LogBytes
+	}
+	return 0
+}
+
+func (x *BuildRecord) GetLogTruncated() bool {
+	if x != nil {
+		return x.LogTruncated
+	}
+	return false
+}
+
+func (x *BuildRecord) GetLogDropped() bool {
+	if x != nil {
+		return x.LogDropped
+	}
+	return false
 }
 
 type CreateBuildRequest struct {
@@ -6374,9 +6407,14 @@ func (x *ListBuildsResponse) GetBuilds() []*BuildRecord {
 }
 
 type GetBuildRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Owner         string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
-	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Owner string                 `protobuf:"bytes,1,opt,name=owner,proto3" json:"owner,omitempty"`
+	Id    string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	// log_offset skips this many LOG LINES (0 = the first line).
+	LogOffset int32 `protobuf:"varint,3,opt,name=log_offset,json=logOffset,proto3" json:"log_offset,omitempty"`
+	// log_limit is the maximum number of lines to return. 0 = default (200);
+	// capped at 1000. Page through a long log with offset/limit.
+	LogLimit      int32 `protobuf:"varint,4,opt,name=log_limit,json=logLimit,proto3" json:"log_limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6425,10 +6463,31 @@ func (x *GetBuildRequest) GetId() string {
 	return ""
 }
 
+func (x *GetBuildRequest) GetLogOffset() int32 {
+	if x != nil {
+		return x.LogOffset
+	}
+	return 0
+}
+
+func (x *GetBuildRequest) GetLogLimit() int32 {
+	if x != nil {
+		return x.LogLimit
+	}
+	return 0
+}
+
 type GetBuildResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Build         *BuildRecord           `protobuf:"bytes,1,opt,name=build,proto3" json:"build,omitempty"`
-	Found         bool                   `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Build *BuildRecord           `protobuf:"bytes,1,opt,name=build,proto3" json:"build,omitempty"`
+	Found bool                   `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
+	// log_lines are the requested lines, WITHOUT line numbers (numbering is a
+	// presentation concern). first_line is the 1-based number of log_lines[0].
+	LogLines   []string `protobuf:"bytes,3,rep,name=log_lines,json=logLines,proto3" json:"log_lines,omitempty"`
+	FirstLine  int32    `protobuf:"varint,4,opt,name=first_line,json=firstLine,proto3" json:"first_line,omitempty"`
+	TotalLines int32    `protobuf:"varint,5,opt,name=total_lines,json=totalLines,proto3" json:"total_lines,omitempty"`
+	// more reports that further lines exist beyond this page.
+	More          bool `protobuf:"varint,6,opt,name=more,proto3" json:"more,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6473,6 +6532,34 @@ func (x *GetBuildResponse) GetBuild() *BuildRecord {
 func (x *GetBuildResponse) GetFound() bool {
 	if x != nil {
 		return x.Found
+	}
+	return false
+}
+
+func (x *GetBuildResponse) GetLogLines() []string {
+	if x != nil {
+		return x.LogLines
+	}
+	return nil
+}
+
+func (x *GetBuildResponse) GetFirstLine() int32 {
+	if x != nil {
+		return x.FirstLine
+	}
+	return 0
+}
+
+func (x *GetBuildResponse) GetTotalLines() int32 {
+	if x != nil {
+		return x.TotalLines
+	}
+	return 0
+}
+
+func (x *GetBuildResponse) GetMore() bool {
+	if x != nil {
+		return x.More
 	}
 	return false
 }
@@ -8207,7 +8294,7 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"cache_hits\x18\x05 \x01(\x05R\tcacheHits\x12\x1f\n" +
 	"\vsteps_total\x18\x06 \x01(\x05R\n" +
 	"stepsTotal\x12!\n" +
-	"\fsteps_cached\x18\a \x01(\x05R\vstepsCached\"\xac\x02\n" +
+	"\fsteps_cached\x18\a \x01(\x05R\vstepsCached\"\x8f\x03\n" +
 	"\vBuildRecord\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05owner\x18\x02 \x01(\tR\x05owner\x12\x12\n" +
@@ -8226,7 +8313,11 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"cache_used\x18\v \x01(\bR\tcacheUsed\x12\x1e\n" +
 	"\n" +
 	"durability\x18\f \x01(\tR\n" +
-	"durability\"\x85\x03\n" +
+	"durability\x12\x1b\n" +
+	"\tlog_bytes\x18\r \x01(\x03R\blogBytes\x12#\n" +
+	"\rlog_truncated\x18\x0e \x01(\bR\flogTruncated\x12\x1f\n" +
+	"\vlog_dropped\x18\x0f \x01(\bR\n" +
+	"logDropped\"\x85\x03\n" +
 	"\x12CreateBuildRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x18\n" +
@@ -8250,13 +8341,22 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\"E\n" +
 	"\x12ListBuildsResponse\x12/\n" +
-	"\x06builds\x18\x01 \x03(\v2\x17.easyops.v1.BuildRecordR\x06builds\"7\n" +
+	"\x06builds\x18\x01 \x03(\v2\x17.easyops.v1.BuildRecordR\x06builds\"s\n" +
 	"\x0fGetBuildRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x0e\n" +
-	"\x02id\x18\x02 \x01(\tR\x02id\"W\n" +
+	"\x02id\x18\x02 \x01(\tR\x02id\x12\x1d\n" +
+	"\n" +
+	"log_offset\x18\x03 \x01(\x05R\tlogOffset\x12\x1b\n" +
+	"\tlog_limit\x18\x04 \x01(\x05R\blogLimit\"\xc8\x01\n" +
 	"\x10GetBuildResponse\x12-\n" +
 	"\x05build\x18\x01 \x01(\v2\x17.easyops.v1.BuildRecordR\x05build\x12\x14\n" +
-	"\x05found\x18\x02 \x01(\bR\x05found\":\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\x12\x1b\n" +
+	"\tlog_lines\x18\x03 \x03(\tR\blogLines\x12\x1d\n" +
+	"\n" +
+	"first_line\x18\x04 \x01(\x05R\tfirstLine\x12\x1f\n" +
+	"\vtotal_lines\x18\x05 \x01(\x05R\n" +
+	"totalLines\x12\x12\n" +
+	"\x04more\x18\x06 \x01(\bR\x04more\":\n" +
 	"\x12CancelBuildRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\"Z\n" +

@@ -696,8 +696,9 @@ message BuildRecord {
   string state = 6;
   // error is the failure message (state=failed) or the cancel reason.
   string error = 7;
-  // log holds the TAIL of the build output (bounded; a failure explains itself
-  // at the end).
+  // log holds the build output, truncated to the FIRST LogCapBytes (1 MiB) when
+  // the output is longer; log_truncated says so. The HEAD is kept rather than
+  // the tail so that line offsets stay coherent when paging.
   string log = 8;
   int64 started_at = 9;  // unix millis
   int64 finished_at = 10; // unix millis (0 while running)
@@ -706,6 +707,17 @@ message BuildRecord {
   // durability is always "memory" today, so a client can never mistake a
   // record for durable history.
   string durability = 12;
+  // log_bytes is the FULL size of the build output, which can exceed the bytes
+  // actually kept (see log_truncated).
+  int64 log_bytes = 13;
+  // log_truncated reports that the record holds only the FIRST LogCapBytes of
+  // the output (1 MiB). The caller is told rather than silently given a partial
+  // log.
+  bool log_truncated = 14;
+  // log_dropped reports that the log was released to stay within the global
+  // memory budget (an old finished build). Metadata is still available; the log
+  // body is not.
+  bool log_dropped = 15;
 }
 
 message CreateBuildRequest {
@@ -732,8 +744,23 @@ message ListBuildsResponse { repeated BuildRecord builds = 1; }
 message GetBuildRequest {
   string owner = 1;
   string id = 2;
+  // log_offset skips this many LOG LINES (0 = the first line).
+  int32 log_offset = 3;
+  // log_limit is the maximum number of lines to return. 0 = default (200);
+  // capped at 1000. Page through a long log with offset/limit.
+  int32 log_limit = 4;
 }
-message GetBuildResponse { BuildRecord build = 1; bool found = 2; }
+message GetBuildResponse {
+  BuildRecord build = 1;
+  bool found = 2;
+  // log_lines are the requested lines, WITHOUT line numbers (numbering is a
+  // presentation concern). first_line is the 1-based number of log_lines[0].
+  repeated string log_lines = 3;
+  int32 first_line = 4;
+  int32 total_lines = 5;
+  // more reports that further lines exist beyond this page.
+  bool more = 6;
+}
 
 message CancelBuildRequest {
   string owner = 1;

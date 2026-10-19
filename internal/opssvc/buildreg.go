@@ -87,7 +87,12 @@ func (s *Service) ListBuilds(ctx context.Context, req *opsv1.ListBuildsRequest) 
 	return &opsv1.ListBuildsResponse{Builds: out}, nil
 }
 
-// GetBuild returns one build.
+// GetBuild returns one build plus a WINDOW of its log by line.
+//
+// The window is by LINE, not by byte: a caller reads a log top-down, and line
+// numbers are what a person (or a model) can act on. offset is 0-based; limit
+// defaults to 200 and is capped at 1000, so a single response stays small while
+// the whole log remains reachable by paging.
 func (s *Service) GetBuild(ctx context.Context, req *opsv1.GetBuildRequest) (*opsv1.GetBuildResponse, error) {
 	if s.builds == nil {
 		return nil, errNoBuildRegistry()
@@ -99,7 +104,16 @@ func (s *Service) GetBuild(ctx context.Context, req *opsv1.GetBuildRequest) (*op
 	if !owned(rec.Owner, req.GetOwner()) {
 		return &opsv1.GetBuildResponse{Found: false}, nil
 	}
-	return &opsv1.GetBuildResponse{Build: toBuildRecord(rec), Found: true}, nil
+	page, _ := s.builds.LogPage(req.GetId(), int(req.GetLogOffset()), int(req.GetLogLimit()))
+	more := page.FirstLine-1+len(page.Lines) < page.TotalLines
+	return &opsv1.GetBuildResponse{
+		Build:      toBuildRecord(rec),
+		Found:      true,
+		LogLines:   page.Lines,
+		FirstLine:  int32(page.FirstLine),
+		TotalLines: int32(page.TotalLines),
+		More:       more,
+	}, nil
 }
 
 // CancelBuild cancels a running build.
@@ -125,6 +139,7 @@ func toBuildRecord(r buildreg.Record) *opsv1.BuildRecord {
 		Image: r.Image, State: string(r.State), Error: r.Error,
 		Log: r.Log, StartedAt: r.StartedAt, FinishedAt: r.FinishedAt,
 		CacheUsed: r.CacheUsed, Durability: DurabilityMemory,
+		LogBytes: r.LogBytes, LogTruncated: r.LogTruncated, LogDropped: r.LogDropped,
 	}
 }
 

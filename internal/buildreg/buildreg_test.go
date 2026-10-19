@@ -89,24 +89,110 @@ func TestCancelUnknown(t *testing.T) {
 	}
 }
 
-// TestLogTailIsBounded: the log keeps only the LAST LogTailBytes, because a
-// failure explains itself at the end and a build log is unbounded.
-func TestLogTailIsBounded(t *testing.T) {
+// TestLogIsTruncatedAtCapAndFlagged: the log keeps the FIRST LogCapBytes and
+// reports that it was truncated. Keeping the head (not the tail) is what makes
+// line offsets coherent when paging: offset 0 must be the real first line.
+func TestLogIsTruncatedAtCapAndFlagged(t *testing.T) {
 	g := New(10)
 	id, _ := g.Start(context.Background(), "acme", "app", "v1", false)
-	big := make([]byte, LogTailBytes*3)
+	big := make([]byte, LogCapBytes*2)
 	for i := range big {
 		big[i] = 'x'
 	}
 	g.AppendLog(id, string(big))
-	g.AppendLog(id, "TAIL-MARKER")
+	g.AppendLog(id, "AFTER-CAP-MARKER")
 
 	rec, _ := g.Get(id)
-	if len(rec.Log) > LogTailBytes {
-		t.Errorf("log = %d bytes, want <= %d", len(rec.Log), LogTailBytes)
+	if len(rec.Log) > LogCapBytes {
+		t.Errorf("log = %d bytes, want <= %d", len(rec.Log), LogCapBytes)
 	}
-	if !hasSuffix(rec.Log, "TAIL-MARKER") {
-		t.Error("the tail must survive truncation")
+	if !rec.LogTruncated {
+		t.Error("a truncated log must be FLAGGED, not silently shortened")
+	}
+	if rec.LogBytes != int64(len(big)+len("AFTER-CAP-MARKER")) {
+		t.Errorf("logBytes = %d, want the FULL output size", rec.LogBytes)
+	}
+	if hasSuffix(rec.Log, "AFTER-CAP-MARKER") {
+		t.Error("the head is kept, so post-cap output must not appear")
+	}
+}
+
+// TestLogLinesDefaultAndCapture: the per-record cap is exactly LogCapBytes.
+func TestLogCapIsOneMiB(t *testing.T) {
+	if LogCapBytes != 1<<20 {
+		t.Errorf("LogCapBytes = %d, want 1 MiB", LogCapBytes)
+	}
+}
+
+// TestLogPagePagination: a log is read by LINE, with a 1-based first-line so a
+// renderer can number it.
+func TestLogPagePagination(t *testing.T) {
+	g := New(10)
+	id, _ := g.Start(context.Background(), "acme", "app", "v", false)
+	for i := 1; i <= 300; i++ {
+		g.AppendLog(id, "line"+itoa(int64(i))+"\n")
+	}
+
+	// Default page: first 200 lines, numbered from 1.
+	p, ok := g.LogPage(id, 0, 0)
+	if !ok || len(p.Lines) != DefaultLogLines {
+		t.Fatalf("default page = %d lines, want %d", len(p.Lines), DefaultLogLines)
+	}
+	if p.FirstLine != 1 || p.Lines[0] != "line1" {
+		t.Errorf("first line = %q #%d", p.Lines[0], p.FirstLine)
+	}
+	if p.TotalLines != 300 {
+		t.Errorf("totalLines = %d, want 300", p.TotalLines)
+	}
+
+	// Second page: offset 200 -> lines 201..300, FirstLine 201.
+	p2, _ := g.LogPage(id, 200, 0)
+	if p2.FirstLine != 201 {
+		t.Errorf("firstLine = %d, want 201", p2.FirstLine)
+	}
+	if len(p2.Lines) != 100 || p2.Lines[0] != "line201" {
+		t.Errorf("second page starts %q (%d lines)", p2.Lines[0], len(p2.Lines))
+	}
+
+	// Limit is capped at MaxLogLines.
+	p3, _ := g.LogPage(id, 0, 99999)
+	if len(p3.Lines) > MaxLogLines {
+		t.Errorf("limit not capped: %d lines", len(p3.Lines))
+	}
+
+	// An offset past the end yields no lines but still reports the total.
+	p4, _ := g.LogPage(id, 5000, 10)
+	if len(p4.Lines) != 0 || p4.TotalLines != 300 {
+		t.Errorf("past-end page: %d lines, total %d", len(p4.Lines), p4.TotalLines)
+	}
+}
+
+// TestGlobalLogBudgetDropsOldestFinished: the TOTAL log memory is what protects
+// the process. When it is exceeded, the oldest finished build's log is released
+// (metadata survives) and a running build's log is never touched.
+func TestGlobalLogBudgetDropsOldestFinished(t *testing.T) {
+	g := New(10)
+	// Budget: 1.5 records' worth of log. Two big finished logs cannot both fit,
+	// so the older one must be released.
+	g.budget = LogCapBytes + LogCapBytes/2
+
+	old, _ := g.Start(context.Background(), "acme", "app", "v", false)
+	g.AppendLog(old, string(make([]byte, LogCapBytes)))
+	g.Finish(old, "ref", nil)
+
+	live, _ := g.Start(context.Background(), "acme", "app", "v", false)
+	g.AppendLog(live, "live-log")
+
+	// Push past the budget with a third record's big log.
+	big, _ := g.Start(context.Background(), "acme", "app", "v", false)
+	g.AppendLog(big, string(make([]byte, LogCapBytes)))
+	g.Finish(big, "ref", nil)
+
+	if rec, _ := g.Get(old); !rec.LogDropped || rec.Log != "" {
+		t.Errorf("the oldest FINISHED log must be released: dropped=%v len=%d", rec.LogDropped, len(rec.Log))
+	}
+	if rec, _ := g.Get(live); rec.Log == "" {
+		t.Error("a RUNNING build's log must never be released")
 	}
 }
 
