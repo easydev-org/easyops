@@ -650,10 +650,50 @@ message BuildImageRequest {
   // image_cache enables REGISTRY cache import/export for this build (see
   // CacheOptions). Absent = daemon-local cache only.
   CacheOptions image_cache = 8;
+  // output selects what the build PRODUCES:
+  //
+  //   "image" (default) - push a container image to the registry.
+  //   "files"           - export a FILE TREE instead (a compiled binary, a
+  //                       frontend dist/, a test report).
+  //
+  // For "files" the Dockerfile must name the stage to export, conventionally
+  // "export":
+  //
+  //   FROM golang:1.26 AS build
+  //   RUN go build -o /out/app ./cmd/app
+  //   FROM scratch AS export
+  //   COPY --from=build /out /
+  //
+  // The tree comes back as a TAR in BuildFilesResponse.files (buildkit streams
+  // it to the client through a session filesync, so nothing lands on the daemon).
+  string output = 9;
+  // output_stage is the stage to export when output="files"
+  // (default "export").
+  string output_stage = 10;
+  // max_output_bytes caps the exported tree (0 = 128 MiB).
+  int64 max_output_bytes = 11;
 }
 message BuildImageResponse {
   string image_ref = 1;
   string log = 2;
+}
+
+// BuildFilesResponse is a FILE build: instead of an image, the exported tree.
+//
+// `files` is an uncompressed tar of the tree, with paths RELATIVE to the export
+// root (untar it straight into a directory). It is returned inline because the
+// artifacts are small (a binary, a dist/) — anything big belongs in a registry
+// as an image.
+message BuildFilesResponse {
+  bytes files = 1;
+  // file_count / file_bytes describe the tree.
+  int32 file_count = 2;
+  int64 file_bytes = 3;
+  // truncated reports that the tree exceeded max_output_bytes and was NOT
+  // exported: a partial artifact is worse than an explicit failure, so `files`
+  // is empty in that case.
+  bool truncated = 4;
+  string log = 5;
 }
 
 // BuildImageStream builds like BuildImage but STREAMS the build output as it is
@@ -925,6 +965,10 @@ service OpsService {
 
   // ---- image build / import ----
   rpc BuildImage(BuildImageRequest) returns (BuildImageResponse);
+  // BuildFiles runs a build whose product is a FILE TREE, not an image: a
+  // compiled binary, a frontend dist/, a test report. Set output="files" in the
+  // request (or leave it and use this RPC, which implies it).
+  rpc BuildFiles(BuildImageRequest) returns (BuildFilesResponse);
   rpc BuildImageStream(BuildImageRequest) returns (stream BuildImageStreamEvent);
   rpc ImportImage(ImportImageRequest) returns (ImportImageResponse);
 

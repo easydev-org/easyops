@@ -102,6 +102,8 @@ const (
 	OpsServiceDeleteSecretProcedure = "/easyops.v1.OpsService/DeleteSecret"
 	// OpsServiceBuildImageProcedure is the procedure name of the OpsService's BuildImage RPC.
 	OpsServiceBuildImageProcedure = "/easyops.v1.OpsService/BuildImage"
+	// OpsServiceBuildFilesProcedure is the procedure name of the OpsService's BuildFiles RPC.
+	OpsServiceBuildFilesProcedure = "/easyops.v1.OpsService/BuildFiles"
 	// OpsServiceBuildImageStreamProcedure is the procedure name of the OpsService's BuildImageStream
 	// RPC.
 	OpsServiceBuildImageStreamProcedure = "/easyops.v1.OpsService/BuildImageStream"
@@ -356,6 +358,13 @@ var (
 			Procedure:  OpsServiceBuildImageProcedure,
 		}
 	})
+	opsServiceBuildFilesSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_easyops_v1_ops_proto.Services().ByName("OpsService").Methods().ByName("BuildFiles"),
+			Procedure:  OpsServiceBuildFilesProcedure,
+		}
+	})
 	opsServiceBuildImageStreamSpec = sync.OnceValue(func() connect.Spec {
 		return connect.Spec{
 			StreamType: connect.StreamTypeServer,
@@ -488,6 +497,10 @@ type OpsServiceClient interface {
 	DeleteSecret(context.Context, *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error)
 	// ---- image build / import ----
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
+	// BuildFiles runs a build whose product is a FILE TREE, not an image: a
+	// compiled binary, a frontend dist/, a test report. Set output="files" in the
+	// request (or leave it and use this RPC, which implies it).
+	BuildFiles(context.Context, *v1.BuildImageRequest) (*v1.BuildFilesResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest) (OpsServiceBuildImageStreamClientStream, error)
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
 	// ---- asynchronous builds (identity + history) ----
@@ -661,6 +674,10 @@ type OpsServiceHandler interface {
 	DeleteSecret(context.Context, *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error)
 	// ---- image build / import ----
 	BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error)
+	// BuildFiles runs a build whose product is a FILE TREE, not an image: a
+	// compiled binary, a frontend dist/, a test report. Set output="files" in the
+	// request (or leave it and use this RPC, which implies it).
+	BuildFiles(context.Context, *v1.BuildImageRequest) (*v1.BuildFilesResponse, error)
 	BuildImageStream(context.Context, *v1.BuildImageRequest, OpsServiceBuildImageStreamServerStream) error
 	ImportImage(context.Context, *v1.ImportImageRequest) (*v1.ImportImageResponse, error)
 	// ---- asynchronous builds (identity + history) ----
@@ -721,6 +738,7 @@ func RegisterOpsServiceHandler(server *connect.Server, svc OpsServiceHandler) {
 		connect.Method{Spec: opsServiceListSecretsSpec(), Handler: adapter.listSecrets},
 		connect.Method{Spec: opsServiceDeleteSecretSpec(), Handler: adapter.deleteSecret},
 		connect.Method{Spec: opsServiceBuildImageSpec(), Handler: adapter.buildImage},
+		connect.Method{Spec: opsServiceBuildFilesSpec(), Handler: adapter.buildFiles},
 		connect.Method{Spec: opsServiceBuildImageStreamSpec(), Handler: adapter.buildImageStream},
 		connect.Method{Spec: opsServiceImportImageSpec(), Handler: adapter.importImage},
 		connect.Method{Spec: opsServiceCreateBuildSpec(), Handler: adapter.createBuild},
@@ -945,6 +963,10 @@ func (UnimplementedOpsServiceHandler) DeleteSecret(context.Context, *v1.DeleteSe
 
 func (UnimplementedOpsServiceHandler) BuildImage(context.Context, *v1.BuildImageRequest) (*v1.BuildImageResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.BuildImage is not implemented")
+}
+
+func (UnimplementedOpsServiceHandler) BuildFiles(context.Context, *v1.BuildImageRequest) (*v1.BuildFilesResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "easyops.v1.OpsService.BuildFiles is not implemented")
 }
 
 func (UnimplementedOpsServiceHandler) BuildImageStream(context.Context, *v1.BuildImageRequest, OpsServiceBuildImageStreamServerStream) error {
@@ -1254,6 +1276,14 @@ func (c *opsServiceClient) DeleteSecret(ctx context.Context, req *v1.DeleteSecre
 func (c *opsServiceClient) BuildImage(ctx context.Context, req *v1.BuildImageRequest) (*v1.BuildImageResponse, error) {
 	var res v1.BuildImageResponse
 	if err := c.client.CallUnary(ctx, opsServiceBuildImageSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *opsServiceClient) BuildFiles(ctx context.Context, req *v1.BuildImageRequest) (*v1.BuildFilesResponse, error) {
+	var res v1.BuildFilesResponse
+	if err := c.client.CallUnary(ctx, opsServiceBuildFilesSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -1735,6 +1765,18 @@ func (h opsServiceHandler) buildImage(ctx context.Context, _ connect.Spec, strea
 		return err
 	}
 	res, err := h.svc.BuildImage(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h opsServiceHandler) buildFiles(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.BuildImageRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.BuildFiles(ctx, &req)
 	if err != nil {
 		return err
 	}

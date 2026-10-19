@@ -8,11 +8,14 @@
 package imagebuild
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +63,41 @@ type Request struct {
 	// survive a buildkitd restart (or a different daemon picking up the build).
 	// The daemon's local cache alone dies with its PVC.
 	Cache CacheOptions
+
+	// Output selects what the build PRODUCES:
+	//
+	//	"image" (default) - push an image to the registry.
+	//	"files"           - export a FILE TREE instead of an image.
+	//
+	// "files" is for artifacts that are not containers: a compiled binary, a
+	// frontend dist/, a test report. The Dockerfile names the stage to export
+	// via OutputStage (conventionally "export"):
+	//
+	//	FROM golang:1.26 AS build
+	//	RUN go build -o /out/app ./cmd/app
+	//	FROM scratch AS export
+	//	COPY --from=build /out /
+	//
+	// The bytes arrive in THIS process: buildkit's local exporter streams the
+	// tree through a session filesync, so the client receives it - nothing is
+	// written to the daemon's disk.
+	Output string
+	// OutputStage is the stage to export when Output=files (default "export").
+	OutputStage string
+	// MaxOutputBytes caps the exported tree (0 = MaxFilesBytes).
+	MaxOutputBytes int64
 }
+
+// Build outputs.
+const (
+	OutputImage = "image"
+	OutputFiles = "files"
+)
+
+// MaxFilesBytes is the default cap on an exported file tree (128 MiB). The tree
+// is assembled in memory because it is handed back over the RPC; a bigger
+// artifact belongs in a registry (as an image) or in blob storage.
+const MaxFilesBytes = 128 << 20
 
 // CacheOptions controls registry cache import/export for one build.
 //
@@ -90,7 +127,13 @@ func (b *Builder) cacheRef(req Request) string {
 	c := req.Cache
 	repo := strings.Trim(c.Repo, "/")
 	if repo == "" {
-		repo = strings.Trim(req.Repo, "/") + "-cache"
+		// A file build may have no image repo; fall back to a stable name so the
+		// cache ref stays well-formed (an empty repo would yield "/-cache").
+		base := strings.Trim(req.Repo, "/")
+		if base == "" {
+			base = "builds"
+		}
+		repo = base + "-cache"
 	}
 	tag := c.Tag
 	if tag == "" {
@@ -106,6 +149,14 @@ func (b *Builder) cacheRef(req Request) string {
 type Result struct {
 	ImageRef string
 	Log      string
+	// Files is a tar archive of the exported tree when Request.Output=files.
+	Files []byte
+	// FileCount / FileBytes describe the exported tree.
+	FileCount int
+	FileBytes int64
+	// FilesTruncated reports that the tree exceeded the cap and was NOT
+	// exported, rather than silently handing back a partial tree.
+	FilesTruncated bool
 }
 
 // FullRef is the destination reference for a repo path + tag.
@@ -150,8 +201,13 @@ func (b *Builder) dockerConfigJSON() ([]byte, error) {
 
 // validate resolves the context/dockerfile dirs and the destination ref.
 func (b *Builder) validate(req Request) (ref, ctxDir, dockerfileDir, filename string, err error) {
-	if req.Repo == "" || req.Tag == "" {
-		return "", "", "", "", errors.New("repo and tag required")
+	// A FILE build produces no image, so repo/tag are optional: they only name
+	// the registry cache. Requiring them would force a caller who just wants a
+	// compiled binary to invent an image name.
+	if req.Output != OutputFiles {
+		if req.Repo == "" || req.Tag == "" {
+			return "", "", "", "", errors.New("repo and tag required")
+		}
 	}
 	ctxDir = filepath.Join(req.ContextDir, filepath.FromSlash(strings.Trim(req.Context, "/")))
 	if fi, e := os.Stat(ctxDir); e != nil || !fi.IsDir() {
@@ -166,13 +222,15 @@ func (b *Builder) validate(req Request) (ref, ctxDir, dockerfileDir, filename st
 	if _, e := os.Stat(filepath.Join(req.ContextDir, filepath.FromSlash(dockerfile))); e != nil {
 		return "", "", "", "", fmt.Errorf("dockerfile %q not found in repository", dockerfile)
 	}
-	ref = b.FullRef(req.Repo, req.Tag)
+	if req.Output != OutputFiles {
+		ref = b.FullRef(req.Repo, req.Tag)
+	}
 	return ref, ctxDir, dockerfileDir, filename, nil
 }
 
 // solve runs one buildkit Solve with the dockerfile frontend and streams the
 // progress. `emit` (optional) receives log chunks as they are produced.
-func (b *Builder) solve(ctx context.Context, req Request, emit func(string)) (string, string, error) {
+func (b *Builder) solve(ctx context.Context, req Request, emit func(string), out *Result) (string, string, error) {
 	ref, ctxDir, dockerfileDir, filename, err := b.validate(req)
 	if err != nil {
 		return "", "", err
@@ -218,6 +276,37 @@ func (b *Builder) solve(ctx context.Context, req Request, emit func(string)) (st
 	if b.scheme() == "http" {
 		// The in-cluster registry is plaintext HTTP.
 		expAttrs["registry.insecure"] = "true"
+	}
+
+	// Choose the exporter. An image build pushes to the registry; a file build
+	// exports a TREE back to this process.
+	var exports []bkclient.ExportEntry
+	filesMode := req.Output == OutputFiles
+	var outDir string
+	if filesMode {
+		// buildkit's `local` exporter writes into a client-side directory through
+		// a session filesync (solve.go: filesync.WithFSSyncDir). A temp dir here
+		// is therefore the transport: the daemon streams the tree into it, and we
+		// tar it up for the RPC. TempDir keeps it off any persistent volume.
+		outDir, err = os.MkdirTemp("", "buildout-*")
+		if err != nil {
+			return "", "", fmt.Errorf("export dir: %w", err)
+		}
+		stage := req.OutputStage
+		if stage == "" {
+			stage = "export"
+		}
+		// `target` selects the stage; the dockerfile frontend understands it.
+		attrs["target"] = stage
+		exports = []bkclient.ExportEntry{{
+			Type:      "local",
+			OutputDir: outDir,
+		}}
+	} else {
+		exports = []bkclient.ExportEntry{{
+			Type:  "image",
+			Attrs: expAttrs,
+		}}
 	}
 
 	// Registry cache. Imports warm THIS daemon from the registry (it may be a
@@ -276,19 +365,38 @@ func (b *Builder) solve(ctx context.Context, req Request, emit func(string)) (st
 			"context":    ctxFS,
 			"dockerfile": dfFS,
 		},
-		Exports: []bkclient.ExportEntry{{
-			Type:  "image",
-			Attrs: expAttrs,
-		}},
+		Exports:      exports,
 		CacheImports: cacheImports,
 		CacheExports: cacheExports,
 		Session:      []session.Attachable{ap},
 	}, ch)
 	<-done
+	if filesMode && outDir != "" {
+		defer os.RemoveAll(outDir)
+	}
 	if serr != nil {
 		mu.Lock()
 		defer mu.Unlock()
 		return ref, "", fmt.Errorf("buildkit solve: %w\n%s", serr, tailBytes(logBuf.String(), 16*1024))
+	}
+	if filesMode {
+		limit := req.MaxOutputBytes
+		if limit <= 0 {
+			limit = MaxFilesBytes
+		}
+		files, count, bytes, truncated, ferr := tarDir(outDir, limit)
+		if ferr != nil {
+			return ref, "", ferr
+		}
+		if out != nil {
+			out.Files = files
+			out.FileCount = count
+			out.FileBytes = bytes
+			out.FilesTruncated = truncated
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return ref, tailBytes(logBuf.String(), 16*1024), nil
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -341,18 +449,99 @@ func decodeBasic(s string) (string, string, bool) {
 
 // Build runs the build and pushes the image.
 func (b *Builder) Build(ctx context.Context, req Request) (Result, error) {
-	ref, log, err := b.solve(ctx, req, nil)
+	var res Result
+	ref, log, err := b.solve(ctx, req, nil, &res)
 	if err != nil {
 		return Result{}, err
 	}
-	return Result{ImageRef: ref, Log: log}, nil
+	res.ImageRef = ref
+	res.Log = log
+	return res, nil
 }
 
 // BuildStream runs the build, streaming output to `emit`.
 func (b *Builder) BuildStream(ctx context.Context, req Request, emit func(chunk string)) (string, error) {
-	ref, _, err := b.solve(ctx, req, emit)
+	ref, _, err := b.solve(ctx, req, emit, nil)
 	return ref, err
 }
+
+// BuildFiles runs a FILE build and returns the exported tree as a tar.
+func (b *Builder) BuildFiles(ctx context.Context, req Request) (Result, error) {
+	req.Output = OutputFiles
+	return b.Build(ctx, req)
+}
+
+// tarDir packs dir into an in-memory tar, refusing to exceed limit.
+//
+// The whole tree is buffered because it is handed back over the RPC in one
+// message. Exceeding the cap FAILS the export (FilesTruncated) rather than
+// returning a partial tree: a half-copied artifact is worse than a clear error,
+// and the caller can switch to an image build for anything that big.
+func tarDir(dir string, limit int64) (data []byte, count int, total int64, truncated bool, err error) {
+	// A non-positive limit means "no practical cap": callers pass MaxFilesBytes
+	// explicitly, but a zero here must not mean "reject every file".
+	if limit <= 0 {
+		limit = MaxFilesBytes
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if path == dir {
+			return nil
+		}
+		rel, rerr := filepath.Rel(dir, path)
+		if rerr != nil {
+			return rerr
+		}
+		hdr, herr := tar.FileInfoHeader(info, "")
+		if herr != nil {
+			return herr
+		}
+		hdr.Name = filepath.ToSlash(rel)
+		if info.IsDir() {
+			hdr.Name += "/"
+		}
+		if info.Mode().IsRegular() {
+			total += info.Size()
+			if total > limit {
+				truncated = true
+				return errFileCap
+			}
+		}
+		if werr := tw.WriteHeader(hdr); werr != nil {
+			return werr
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, oerr := os.Open(path)
+		if oerr != nil {
+			return oerr
+		}
+		defer f.Close()
+		if _, cerr := io.Copy(tw, f); cerr != nil {
+			return cerr
+		}
+		count++
+		return nil
+	})
+	if walkErr == errFileCap {
+		return nil, 0, total, true, nil
+	}
+	if walkErr != nil {
+		return nil, 0, 0, false, walkErr
+	}
+	if err := tw.Close(); err != nil {
+		return nil, 0, 0, false, err
+	}
+	return buf.Bytes(), count, total, false, nil
+}
+
+// errFileCap is an internal sentinel: the exported tree exceeded the cap.
+var errFileCap = errors.New("exported tree exceeds the size cap")
 
 // ImportRequest mirrors one upstream image into the deployment registry.
 type ImportRequest struct {
@@ -394,7 +583,7 @@ func (b *Builder) Import(ctx context.Context, req ImportRequest) (Result, error)
 	if _, _, err := b.solve(ctx, Request{
 		ContextDir: dir, Dockerfile: "Dockerfile", Repo: req.Repo, Tag: req.Tag,
 		BuildArgs: map[string]string{"BASE_IMAGE": req.Source},
-	}, nil); err != nil {
+	}, nil, nil); err != nil {
 		return Result{}, err
 	}
 	return Result{ImageRef: ref}, nil
