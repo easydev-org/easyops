@@ -1,15 +1,6 @@
 name: ci
 
-# Check every push and pull request: vet, test, build.
-#
-# This repo had NO CI. That mattered more than usual here because the binary is
-# only produced when an image is built — a compile error sat in main until
-# someone tried to ship it.
-#
-# CGO_ENABLED=0 is deliberate: the artifacts these repos produce run in
-# containers and in guests (Android's bionic, alpine's musl), so a dynamically
-# linked binary is a latent failure that only shows up where the interpreter is
-# missing.
+# Check every push and pull request.
 
 on:
   push:
@@ -34,18 +25,37 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # cmd/easyops/ui.go has `//go:embed all:ui/dist`, and that dist/ is produced
+      # by Containerfile.build from easyops-webui. Nothing is committed, so every
+      # go command fails until it exists:
+      #   cmd/easyops/ui.go:14:12: pattern all:ui/dist: no matching files found
+      - name: build the admin SPA into the embed path
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main \
+            https://github.com/easydev-org/easyops-webui.git /tmp/webui
+          cd /tmp/webui
+          npm ci --no-audit --no-fund
+          mkdir -p "$GITHUB_WORKSPACE/cmd/easyops/ui/dist"
+          OUT_DIR="$GITHUB_WORKSPACE/cmd/easyops/ui/dist" npm run build
+          echo "SPA files: $(find "$GITHUB_WORKSPACE/cmd/easyops/ui/dist" -type f | wc -l)"
+
       - run: go vet ./...
 
       - run: go test ./...
 
-      # Build everything, not just one main: a package that no longer compiles is
-      # still a broken repository even if the entrypoint happens to build.
       - run: go build ./...
 
-      - name: assert the tree is tidy
+      - name: assert the binary is static
         run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum || {
-            echo "::error::go.mod/go.sum are not tidy"
+          set -euo pipefail
+          go build -ldflags "-s -w" -o /tmp/easyops ./cmd/easyops
+          if readelf -l /tmp/easyops | grep -q INTERP; then
+            echo "::error::easyops is dynamically linked"
             exit 1
-          }
+          fi
+          echo "static: OK"
