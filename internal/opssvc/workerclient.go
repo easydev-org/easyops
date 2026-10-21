@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/easy-platform/easyops/internal/sandboxreaper"
+	"github.com/easy-platform/easyops/k8s/sandboxreaper"
 )
 
 // WorkerClient is a minimal agent-worker client. It speaks the worker's Connect

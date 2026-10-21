@@ -3,7 +3,7 @@ package sandboxmgr
 import (
 	"context"
 
-	"github.com/easy-platform/easyops/internal/k8scheck"
+	"github.com/easy-platform/easyops/k8s/k8scheck"
 )
 
 // Preflight probes the RBAC the sandbox backend needs in its namespace: the

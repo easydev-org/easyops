@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/easy-platform/easyops/internal/k8sconfig"
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/k8sconfig"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
 	"k8s.io/client-go/kubernetes"
 )
 

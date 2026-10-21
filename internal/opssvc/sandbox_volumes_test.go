@@ -10,9 +10,9 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // TestResolveSandboxVolumesAuthorizesOwnership: a sandbox may only mount PVCs

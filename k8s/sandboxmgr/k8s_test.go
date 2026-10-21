@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
 )
 
 func newTestClient() *Client {

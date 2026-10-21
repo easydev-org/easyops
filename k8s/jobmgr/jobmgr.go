@@ -17,7 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/easy-platform/easyops/internal/k8sconfig"
+	"github.com/easy-platform/easyops/k8s/k8sconfig"
 )
 
 // Labels/annotations stamped on every Job this manager owns.

@@ -8,7 +8,7 @@ import (
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
 	opsv1connect "github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
 )
 
 // SandboxLogs reads a bounded window of a sandbox's container log. It is the

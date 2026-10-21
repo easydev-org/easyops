@@ -6,7 +6,7 @@ import (
 	"connectrpc.com/connect/v2"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/imagebuild"
+	"github.com/easy-platform/easyops/k8s/imagebuild"
 )
 
 // BuildFiles runs a build whose PRODUCT IS A FILE TREE (a compiled binary, a

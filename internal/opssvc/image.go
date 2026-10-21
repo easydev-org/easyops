@@ -7,7 +7,7 @@ import (
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
 	opsv1connect "github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/imagebuild"
+	"github.com/easy-platform/easyops/k8s/imagebuild"
 )
 
 // errNoImageBackend is returned by image RPCs when the builder is absent.

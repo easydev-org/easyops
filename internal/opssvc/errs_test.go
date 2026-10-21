@@ -13,9 +13,9 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // TestMapK8sErr checks the shared k8s -> Connect code mapping.

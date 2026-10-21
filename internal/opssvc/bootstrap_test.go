@@ -8,8 +8,8 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
 )
 
 // fakeExecutor records the files written via the worker file service.

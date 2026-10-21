@@ -12,7 +12,7 @@ import (
 	"connectrpc.com/connect/v2"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
 )
 
 // defaultGoldenDiskCachePVC is the shared, platform-wide golden-disk cache PVC

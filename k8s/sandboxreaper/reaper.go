@@ -17,7 +17,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
 )
 
 // Job is the minimal worker job summary the reaper needs. It mirrors the

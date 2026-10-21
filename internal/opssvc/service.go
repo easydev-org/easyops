@@ -17,13 +17,13 @@ import (
 	"time"
 
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/buildreg"
-	"github.com/easy-platform/easyops/internal/imagebuild"
-	"github.com/easy-platform/easyops/internal/jobmgr"
-	"github.com/easy-platform/easyops/internal/k8scheck"
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/buildreg"
+	"github.com/easy-platform/easyops/k8s/imagebuild"
+	"github.com/easy-platform/easyops/k8s/jobmgr"
+	"github.com/easy-platform/easyops/k8s/k8scheck"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // serviceReadyTimeout bounds how long DeployService waits for a freshly-deployed

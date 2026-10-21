@@ -6,7 +6,7 @@ import (
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/k8swatch"
+	"github.com/easy-platform/easyops/k8s/k8swatch"
 )
 
 // WatchWorkspace streams the owner's sandboxes, long-lived services and PVCs

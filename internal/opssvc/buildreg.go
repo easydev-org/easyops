@@ -7,8 +7,8 @@ import (
 	"connectrpc.com/connect/v2"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/buildreg"
-	"github.com/easy-platform/easyops/internal/imagebuild"
+	"github.com/easy-platform/easyops/k8s/buildreg"
+	"github.com/easy-platform/easyops/k8s/imagebuild"
 )
 
 // DurabilityMemory is the value reported in BuildRecord.durability. It exists so

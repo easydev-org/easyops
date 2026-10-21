@@ -6,9 +6,9 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
-	"github.com/easy-platform/easyops/internal/sandboxmgr"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/sandboxmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // newWatchTestService builds a Service with BOTH the sandbox and the services

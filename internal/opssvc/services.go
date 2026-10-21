@@ -9,7 +9,7 @@ import (
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
 	opsv1connect "github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // errNoServiceBackend is returned by every service/PVC RPC when the services

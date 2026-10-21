@@ -3,7 +3,7 @@ package servicesmgr
 import (
 	"context"
 
-	"github.com/easy-platform/easyops/internal/k8scheck"
+	"github.com/easy-platform/easyops/k8s/k8scheck"
 )
 
 // Preflight probes the RBAC the service backend needs in its namespace: the

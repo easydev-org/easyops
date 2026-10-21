@@ -22,8 +22,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/watch"
 
-	"github.com/easy-platform/easyops/internal/k8sconfig"
-	"github.com/easy-platform/easyops/internal/runtimeprofiles"
+	"github.com/easy-platform/easyops/k8s/k8sconfig"
+	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
 	"k8s.io/client-go/kubernetes"
 )
 

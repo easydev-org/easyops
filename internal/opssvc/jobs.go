@@ -8,7 +8,7 @@ import (
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
 	"github.com/easy-platform/easyops/gen/easyops/v1/opsv1connect"
-	"github.com/easy-platform/easyops/internal/jobmgr"
+	"github.com/easy-platform/easyops/k8s/jobmgr"
 )
 
 // errNoJobBackend is returned by every Job RPC when the Jobs backend is not

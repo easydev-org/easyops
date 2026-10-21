@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	opsv1 "github.com/easy-platform/easyops/gen/easyops/v1"
-	"github.com/easy-platform/easyops/internal/servicesmgr"
+	"github.com/easy-platform/easyops/k8s/servicesmgr"
 )
 
 // ---- proto -> servicesmgr conversions ----
