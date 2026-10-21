@@ -36,7 +36,13 @@ jobs:
       - name: build the admin SPA into the embed path
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch main \
+          # Pin the UI to its newest RELEASE, not to main. A branch tip is
+          # not reproducible: this build would embed whatever happened to be
+          # pushed, with nothing recording which commit it was.
+          u=$(gh release view --repo easydev-org/easyops-webui --json tagName -q .tagName) \
+            || { echo "::error::easydev-org/easyops-webui has no Release to pin to"; exit 1; }
+          echo "ui=easydev-org/easyops-webui@$u"
+          git clone --depth 1 --branch "$u" \
             https://github.com/easydev-org/easyops-webui.git /tmp/webui
           cd /tmp/webui
           npm ci --no-audit --no-fund
