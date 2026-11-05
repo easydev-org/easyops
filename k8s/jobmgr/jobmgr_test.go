@@ -3,6 +3,7 @@ package jobmgr
 import (
 	"context"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -12,7 +13,10 @@ import (
 
 func newClient() (*Client, *fake.Clientset) {
 	cs := fake.NewSimpleClientset()
-	return NewWithClientset(cs, Config{Namespace: "dev"}), cs
+	// A fake clientset runs no endpoint controller, so a Service never becomes
+	// "ready". Disable the wait: the real behaviour is covered by the k3d
+	// integration suite.
+	return NewWithClientset(cs, Config{Namespace: "dev", ServiceReadyTimeout: time.Nanosecond}), cs
 }
 
 // TestCreateJobBuildsTheObject pins the object the manager renders: labels,

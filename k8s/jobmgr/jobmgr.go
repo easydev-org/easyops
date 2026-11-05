@@ -133,6 +133,15 @@ type Config struct {
 	// makes the guarantee enforceable rather than a deployment trap.
 	UntrustedUID int64
 	UntrustedGID int64
+	// ServiceReadyTimeout bounds how long a job waits for its companion services
+	// to become addressable before the Job is created (0 = don't wait).
+	//
+	// It is NOT optional in practice: a job created at the same instant as its
+	// companion starts before the Service has endpoints and DNS answers, so the
+	// job's first connection fails with "name not resolvable". The integration
+	// suite caught exactly that. Waiting is the only deterministic fix; the image
+	// pull is what makes the companion take a few seconds.
+	ServiceReadyTimeout time.Duration
 }
 
 // DefaultUntrustedID is the UID/GID untrusted jobs run as when Config leaves it
@@ -374,11 +383,14 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Companion services come up FIRST-CLASS: a job that needs a database must
-	// be able to resolve it by name, so the Deployment+Service are created right
-	// after the Job (they race with the job's first pull, which is long enough in
-	// practice; a job that needs a hard guarantee should retry the connect).
+	// Companion services are created BEFORE the job and awaited: a job that
+	// starts at the same instant as its database cannot resolve the Service name
+	// (no endpoints yet) and its first connection fails immediately. Waiting for
+	// the endpoints is the only deterministic ordering.
 	if err := c.createServices(ctx, ns, s); err != nil {
+		return nil, err
+	}
+	if err := c.waitServicesReady(ctx, s); err != nil {
 		return nil, err
 	}
 	return c.view(ctx, created), nil
@@ -435,6 +447,60 @@ func (c *Client) createServices(ctx context.Context, ns string, s Spec) error {
 		}
 	}
 	return nil
+}
+
+// waitServicesReady blocks until every companion Service has at least one ready
+// endpoint, so the job's first connection cannot lose a race with the image pull.
+//
+// A timeout is NOT an error: the companion may be slow (a large image), and
+// failing the whole job would be worse than letting it retry. The caller's own
+// readiness/retry logic still applies; this only removes the common race.
+func (c *Client) waitServicesReady(ctx context.Context, s Spec) error {
+	if len(s.Services) == 0 {
+		return nil
+	}
+	timeout := c.cfg.ServiceReadyTimeout
+	if timeout == 0 {
+		timeout = 2 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	for _, svc := range s.Services {
+		if svc.Name == "" {
+			continue
+		}
+		if err := c.waitOneServiceReady(ctx, s.Namespace, svc.Name, deadline); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) waitOneServiceReady(ctx context.Context, ns, name string, deadline time.Time) error {
+	if ns == "" {
+		ns = c.namespace
+	}
+	for {
+		eps, err := c.cs.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			ready := 0
+			for _, sub := range eps.Subsets {
+				ready += len(sub.Addresses)
+			}
+			if ready > 0 {
+				return nil
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("jobmgr: service %s endpoints: %w", name, err)
+		}
+		if time.Now().After(deadline) {
+			return nil // best effort: do not fail the job on a slow companion
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func servicePorts(in []int32) []corev1.ServicePort {

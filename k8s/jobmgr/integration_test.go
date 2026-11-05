@@ -232,9 +232,16 @@ func TestWorkspacePVCIsMountable(t *testing.T) {
 }
 
 // TestCompanionServiceIsResolvable pins the `services:` contract in a real
-// cluster: a companion is reachable by name from the job.
+// cluster: a companion is REACHABLE before the job's first command runs.
+//
+// The first version of this test failed with "name not resolvable": the Job and
+// its companion were created at the same instant, so the job started before the
+// Service had endpoints. The manager now creates the companion first and waits
+// for a ready endpoint, which is what makes this test deterministic.
 func TestCompanionServiceIsResolvable(t *testing.T) {
 	cfg := clusterConfig(t)
+	// Give the companion time to pull on a cold node.
+	cfg.ServiceReadyTimeout = 90 * time.Second
 	c, err := New(cfg)
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -245,9 +252,8 @@ func TestCompanionServiceIsResolvable(t *testing.T) {
 		Name: name, Image: "busybox:1.36",
 		Command: []string{"/bin/sh"}, Args: []string{"-c", `
 			set -e
-			# nslookup proves the Service DNS entry exists (no image pull needed
-			# for the companion to be addressable).
-			nslookup pg >/dev/null 2>&1 || { echo "NO_SERVICE"; exit 1; }
+			# Resolve AND connect: DNS alone is not the contract, an endpoint is.
+			nslookup pg >/dev/null 2>&1 || { echo "NO_DNS"; exit 1; }
 			echo "service-ok"
 		`},
 		Untrusted: true,
