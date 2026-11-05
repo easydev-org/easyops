@@ -13,6 +13,7 @@ package rpce2e
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,6 +70,14 @@ type harness struct {
 // OpsService) over httptest, so the wire behaviour is the production behaviour.
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith is newHarness with a hook to adjust the Deps before the server
+// is built. Every suite shares ONE construction path, so a variant (a real image
+// builder, a different registry) cannot accidentally test a different wire stack.
+func newHarnessWith(t *testing.T, mutate func(*opssvc.Deps)) *harness {
+	t.Helper()
 	if os.Getenv("EASYOPS_KUBECONFIG") == "" && os.Getenv("KUBECONFIG") == "" {
 		t.Skip("no cluster configured (set EASYOPS_KUBECONFIG or KUBECONFIG)")
 	}
@@ -83,7 +92,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("clientset: %v", err)
 	}
 
-	svc := opssvc.New(opssvc.Deps{
+	deps := opssvc.Deps{
 		Sandbox:             sandboxmgr.NewWithClientset(cs, sandboxmgr.Config{Namespace: ns}),
 		Services:            servicesmgr.NewWithClientset(cs, servicesmgr.Config{Namespace: ns}),
 		Jobs:                jobmgr.NewWithClientset(cs, jobmgr.Config{Namespace: ns}),
@@ -96,7 +105,11 @@ func newHarness(t *testing.T) *harness {
 		// the fixture images pass it.
 		ImageRegistryHost: os.Getenv("EASYOPS_TEST_REGISTRY"),
 		SandboxOrg:        "easyops-fixtures",
-	})
+	}
+	if mutate != nil {
+		mutate(&deps)
+	}
+	svc := opssvc.New(deps)
 
 	server := connect.NewServer(
 		opssvc.NewAuthInterceptor(testToken, nil),
@@ -140,4 +153,40 @@ func bearer(token string) connect.ClientInterceptor {
 			return next(ctx, spec)
 		}
 	}
+}
+
+// httpGetResult is one HTTP response body.
+type httpGetResult struct {
+	status int
+	body   string
+}
+
+// httpGet fetches a URL with optional headers (the registry v2 API).
+func httpGet(t *testing.T, url string, headers map[string]string) httpGetResult {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return httpGetResult{status: resp.StatusCode, body: string(b)}
+}
+
+// hostPortForTests is the registry's HOST-side address (127.0.0.1:port), which is
+// what the test process can reach. EASYOPS_TEST_REGISTRY is the in-cluster name.
+func hostPortForTests(t *testing.T) string {
+	t.Helper()
+	port := os.Getenv("EASYOPS_TEST_REGISTRY_PORT")
+	if port == "" {
+		t.Skip("EASYOPS_TEST_REGISTRY_PORT is not set: run scripts/k3d-up.sh")
+	}
+	return "127.0.0.1:" + port
 }

@@ -43,8 +43,12 @@ if k3d registry list -o json | grep -q "\"name\":\"k3d-${REGISTRY}\""; then
 else
   k3d registry create "${REGISTRY}" --port "127.0.0.1:${REGISTRY_PORT}"
 fi
-# The name k3s resolves inside the cluster (k3d creates the DNS entry).
-REGISTRY_INTERNAL="k3d-${REGISTRY}:${REGISTRY_PORT}"
+# The address the cluster uses. A k3d registry container LISTENS ON 5000;
+# --port only publishes it on the host (127.0.0.1:${REGISTRY_PORT}). Using the
+# host port inside the cluster yields "connection refused" (a real failure from
+# the first build run of this suite).
+REGISTRY_INTERNAL_CONTAINER_PORT="${REGISTRY_INTERNAL_PORT:-5000}"
+REGISTRY_INTERNAL="k3d-${REGISTRY}:${REGISTRY_INTERNAL_CONTAINER_PORT}"
 
 # --- create the cluster -------------------------------------------------------
 # --wait blocks until the server is Ready, so a later `kubectl` cannot race it.
@@ -77,7 +81,18 @@ kubectl get storageclass
 # The fixture images are built and pushed by scripts/fixture-images.sh AFTER
 # this script has exported the registry host.
 echo "registry (host):    127.0.0.1:${REGISTRY_PORT}"
-echo "registry (cluster): ${REGISTRY_INTERNAL}"
+
+# Build a POD that runs inside the cluster and can pull from the registry: the
+# tests need an image reference that BOTH the kubelet AND buildkitd can reach.
+# k3d wires the registry into containerd under its internal name, so that name is
+# the reference a pod must use; it is verified here rather than assumed, because
+# an unreachable registry shows up much later as an opaque ImagePullBackOff.
+CLUSTER_REGISTRY="$(k3d registry list -o json \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["name"])' 2>/dev/null || true)"
+if [ -z "${CLUSTER_REGISTRY}" ]; then
+  CLUSTER_REGISTRY="k3d-${REGISTRY}"
+fi
+echo "registry (cluster): ${CLUSTER_REGISTRY}:${REGISTRY_INTERNAL_CONTAINER_PORT}"
 
 KUBECONFIG_PATH="$(k3d kubeconfig write "${CLUSTER}")"
 echo "kubeconfig: ${KUBECONFIG_PATH}"
@@ -88,8 +103,10 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     echo "EASYOPS_KUBECONFIG=${KUBECONFIG_PATH}"
     echo "EASYOPS_TEST_NAMESPACE=${NS}"
     # Tests build image refs from this host; it is the IN-CLUSTER name.
-    echo "EASYOPS_TEST_REGISTRY=${REGISTRY_INTERNAL}"
+    echo "EASYOPS_TEST_REGISTRY=${CLUSTER_REGISTRY}:${REGISTRY_INTERNAL_CONTAINER_PORT}"
     # The host-side name for docker push.
     echo "EASYOPS_TEST_REGISTRY_HOST=127.0.0.1:${REGISTRY_PORT}"
+    # The host-side port, for the tests that query the registry's v2 API.
+    echo "EASYOPS_TEST_REGISTRY_PORT=${REGISTRY_PORT}"
   } >>"${GITHUB_ENV}"
 fi
