@@ -3,7 +3,10 @@
 #
 # The unit tests use a fake clientset, which cannot catch a kubelet-level
 # failure (a rejected security context, an unwritable mount, a Service that does
-# not resolve). This suite can, so CI runs it against k3d.
+# not resolve, a port mapping that is wrong). These suites can, so CI runs them
+# against k3d.
+#
+# Usage: ./scripts/integration.sh [package...]
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -13,21 +16,28 @@ if [ -z "${EASYOPS_KUBECONFIG:-}" ] && [ -z "${KUBECONFIG:-}" ]; then
   exit 1
 fi
 
+PKGS=("$@")
+if [ ${#PKGS[@]} -eq 0 ]; then
+  PKGS=(./k8s/sandboxmgr/ ./k8s/servicesmgr/ ./k8s/jobmgr/)
+fi
+
 # Diagnostics on failure: the tests report a pod reason, but the EVENTS are what
-# explain a CreateContainerConfigError.
+# explain a CreateContainerConfigError or an ImagePullBackOff.
 dump() {
   local ns="${EASYOPS_TEST_NAMESPACE:-easyops-ci}"
   echo "--- pods ---" >&2
   kubectl -n "$ns" get pods -o wide >&2 || true
   echo "--- events ---" >&2
-  kubectl -n "$ns" get events --sort-by=.lastTimestamp >&2 || true
-  echo "--- describe the managed pods ---" >&2
-  kubectl -n "$ns" describe pods -l workspace/job=1 >&2 || true
+  kubectl -n "$ns" get events --sort-by=.lastTimestamp | tail -40 >&2 || true
+  echo "--- registry ---" >&2
+  kubectl -n "$ns" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.status.containerStatuses[*].state}{"\n"}{end}' >&2 || true
 }
 
 # -count=1 defeats the test cache: an integration result must never be reused.
+# -p 1 runs the packages SEQUENTIALLY: they share one cluster and one namespace,
+# and the sandbox/service suites are timing-sensitive.
 set +e
-CGO_ENABLED=0 go test -tags=integration -count=1 -v -timeout 15m ./k8s/jobmgr/
+CGO_ENABLED=0 go test -tags=integration -count=1 -p 1 -v -timeout 25m "${PKGS[@]}"
 rc=$?
 set -e
 

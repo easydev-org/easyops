@@ -88,14 +88,21 @@ jobs:
 
       # The embedded SPA is only needed by ./cmd/easyops; this job exercises the
       # k8s library packages, so skip the node build entirely.
-      - name: create the k3d cluster
+      - name: create the k3d cluster + registry
         run: ./scripts/k3d-up.sh easyops-ci
+
+      # The fixture images must be in the cluster registry BEFORE the tests: a
+      # sandbox pins imagePullPolicy=Always, so an imported image would be
+      # re-pulled from Docker Hub and fail.
+      - name: build and push fixture images
+        run: ./scripts/fixture-images.sh
 
       - name: sanity-check the cluster
         run: |
           kubectl version
           kubectl get nodes -o wide
           kubectl get storageclass
+          echo "registry: ${EASYOPS_TEST_REGISTRY}"
 
       - name: run the integration suite
         run: ./scripts/integration.sh
@@ -113,5 +120,7 @@ jobs:
 
       - name: delete the cluster
         if: always()
-        run: k3d cluster delete easyops-ci || true
+        run: |
+          k3d cluster delete easyops-ci || true
+          k3d registry delete easyops-registry || true
 
