@@ -68,3 +68,50 @@ jobs:
             exit 1
           fi
           echo "static: OK"
+
+  # The unit tests use a fake clientset, so they cannot catch a kubelet-level
+  # failure: a security context the kubelet refuses, a mount a non-root
+  # container cannot write, a Service that does not resolve, an exit code that
+  # is not reported. This job runs the jobmgr suite against a REAL k3s (k3d =
+  # k3s in Docker) so those failures are caught before a deployment.
+  integration-k3d:
+    name: integration (k3d)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The embedded SPA is only needed by ./cmd/easyops; this job exercises the
+      # k8s library packages, so skip the node build entirely.
+      - name: create the k3d cluster
+        run: ./scripts/k3d-up.sh easyops-ci
+
+      - name: sanity-check the cluster
+        run: |
+          kubectl version
+          kubectl get nodes -o wide
+          kubectl get storageclass
+
+      - name: run the integration suite
+        run: ./scripts/integration.sh
+
+      - name: cluster diagnostics
+        if: failure()
+        run: |
+          echo "--- nodes ---"
+          kubectl get nodes -o wide || true
+          echo "--- all pods ---"
+          kubectl get pods -A || true
+          echo "--- k3d logs (server) ---"
+          k3d node list || true
+          docker ps -a || true
+
+      - name: delete the cluster
+        if: always()
+        run: k3d cluster delete easyops-ci || true
+

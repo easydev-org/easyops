@@ -124,6 +124,41 @@ type Config struct {
 	CPULimit      string
 	MemoryRequest string
 	MemoryLimit   string
+	// UntrustedUID / UntrustedGID are the UID/GID an UNTRUSTED (CI) job runs as.
+	// They default to 65532 (the distroless "nonroot" id).
+	//
+	// They are required, not optional: `runAsNonRoot: true` WITHOUT an explicit
+	// UID makes kubelet refuse to start any image whose USER is root (which is
+	// most of them) with CreateContainerConfigError. An explicit UID is what
+	// makes the guarantee enforceable rather than a deployment trap.
+	UntrustedUID int64
+	UntrustedGID int64
+	// ServiceReadyTimeout bounds how long a job waits for its companion services
+	// to become addressable before the Job is created (0 = don't wait).
+	//
+	// It is NOT optional in practice: a job created at the same instant as its
+	// companion starts before the Service has endpoints and DNS answers, so the
+	// job's first connection fails with "name not resolvable". The integration
+	// suite caught exactly that. Waiting is the only deterministic fix; the image
+	// pull is what makes the companion take a few seconds.
+	ServiceReadyTimeout time.Duration
+}
+
+// DefaultUntrustedID is the UID/GID untrusted jobs run as when Config leaves it
+// unset (65532 = the distroless `nonroot` user, which exists in most images as a
+// plain numeric id even when it has no passwd entry).
+const DefaultUntrustedID int64 = 65532
+
+// untrustedIDs resolves the UID/GID for untrusted jobs.
+func (c Config) untrustedIDs() (int64, int64) {
+	uid, gid := c.UntrustedUID, c.UntrustedGID
+	if uid == 0 {
+		uid = DefaultUntrustedID
+	}
+	if gid == 0 {
+		gid = uid
+	}
+	return uid, gid
 }
 
 // Client manages Jobs in one namespace.
@@ -291,12 +326,18 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 		f := false
 		tr := true
 		nonRoot := true
+		uid, gid := c.cfg.untrustedIDs()
 		job.Spec.Template.Spec.AutomountServiceAccountToken = &f
 		container.SecurityContext = &corev1.SecurityContext{
 			AllowPrivilegeEscalation: &f,
 			Privileged:               &f,
 			ReadOnlyRootFilesystem:   &tr,
 			RunAsNonRoot:             &nonRoot,
+			// An explicit numeric UID is mandatory here: without it, kubelet
+			// refuses every image whose USER is root — which is most of them —
+			// and the job dies with CreateContainerConfigError instead of running.
+			RunAsUser:  &uid,
+			RunAsGroup: &gid,
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -316,6 +357,16 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 		)
 		job.Spec.Template.Spec.Volumes = vols
 		job.Spec.Template.Spec.Containers = []corev1.Container{container}
+		// Pod-level IDs: the FSGroup makes the emptyDir volumes group-writable,
+		// which is what lets a non-root container actually use /workspace and
+		// /tmp (an emptyDir is root-owned 0755 by default).
+		job.Spec.Template.Spec.SecurityContext = &corev1.PodSecurityContext{
+			RunAsNonRoot:   &nonRoot,
+			RunAsUser:      &uid,
+			RunAsGroup:     &gid,
+			FSGroup:        &gid,
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		}
 	}
 	if s.ActiveDeadlineSeconds > 0 {
 		d := int64(s.ActiveDeadlineSeconds)
@@ -325,18 +376,25 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 		t := s.TTLSecondsAfterFinished
 		job.Spec.TTLSecondsAfterFinished = &t
 	}
+
+	// Companion services MUST exist (and have a ready endpoint) BEFORE the Job
+	// is created. A job that starts at the same instant as its database cannot
+	// resolve the Service name yet and its first connection fails immediately —
+	// the k3d integration suite caught exactly that ("NO_DNS" / BackoffLimit).
+	// Creating them first also means a failed companion setup fails the Create
+	// call instead of leaving a job that is doomed to fail.
+	if err := c.createServices(ctx, ns, s); err != nil {
+		return nil, err
+	}
+	if err := c.waitServicesReady(ctx, s); err != nil {
+		return nil, err
+	}
+
 	created, err := c.cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
 		return nil, ErrExists
 	}
 	if err != nil {
-		return nil, err
-	}
-	// Companion services come up FIRST-CLASS: a job that needs a database must
-	// be able to resolve it by name, so the Deployment+Service are created right
-	// after the Job (they race with the job's first pull, which is long enough in
-	// practice; a job that needs a hard guarantee should retry the connect).
-	if err := c.createServices(ctx, ns, s); err != nil {
 		return nil, err
 	}
 	return c.view(ctx, created), nil
@@ -395,6 +453,60 @@ func (c *Client) createServices(ctx context.Context, ns string, s Spec) error {
 	return nil
 }
 
+// waitServicesReady blocks until every companion Service has at least one ready
+// endpoint, so the job's first connection cannot lose a race with the image pull.
+//
+// A timeout is NOT an error: the companion may be slow (a large image), and
+// failing the whole job would be worse than letting it retry. The caller's own
+// readiness/retry logic still applies; this only removes the common race.
+func (c *Client) waitServicesReady(ctx context.Context, s Spec) error {
+	if len(s.Services) == 0 {
+		return nil
+	}
+	timeout := c.cfg.ServiceReadyTimeout
+	if timeout == 0 {
+		timeout = 2 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	for _, svc := range s.Services {
+		if svc.Name == "" {
+			continue
+		}
+		if err := c.waitOneServiceReady(ctx, s.Namespace, svc.Name, deadline); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) waitOneServiceReady(ctx context.Context, ns, name string, deadline time.Time) error {
+	if ns == "" {
+		ns = c.namespace
+	}
+	for {
+		eps, err := c.cs.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			ready := 0
+			for _, sub := range eps.Subsets {
+				ready += len(sub.Addresses)
+			}
+			if ready > 0 {
+				return nil
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("jobmgr: service %s endpoints: %w", name, err)
+		}
+		if time.Now().After(deadline) {
+			return nil // best effort: do not fail the job on a slow companion
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
 func servicePorts(in []int32) []corev1.ServicePort {
 	out := make([]corev1.ServicePort, 0, len(in))
 	for _, p := range in {
@@ -404,6 +516,60 @@ func servicePorts(in []int32) []corev1.ServicePort {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// EnsureWorkspacePVC creates the cache claim a job mounts at /workspace, when
+// it does not exist yet.
+//
+// It is idempotent so a caller can call it before every run: the first run
+// provisions the volume, later runs reuse whatever the toolchain cached.
+func (c *Client) EnsureWorkspacePVC(ctx context.Context, name, size string) error {
+	if name == "" {
+		return fmt.Errorf("jobmgr: pvc name is required")
+	}
+	if size == "" {
+		size = "1Gi"
+	}
+	_, err := c.cs.CoreV1().PersistentVolumeClaims(c.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return nil // already there: reuse the cache
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("jobmgr: get pvc %s: %w", name, err)
+	}
+	q, qerr := resource.ParseQuantity(size)
+	if qerr != nil {
+		return fmt.Errorf("jobmgr: bad pvc size %q: %w", size, qerr)
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: c.namespace,
+			Labels:    map[string]string{LabelManaged: "1"},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: q},
+			},
+		},
+	}
+	if _, err := c.cs.CoreV1().PersistentVolumeClaims(c.namespace).Create(ctx, pvc, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil // lost a race with another run: fine, it exists
+		}
+		return fmt.Errorf("jobmgr: create pvc %s: %w", name, err)
+	}
+	return nil
+}
+
+// DeleteWorkspacePVC removes a cache claim (missing is not an error).
+func (c *Client) DeleteWorkspacePVC(ctx context.Context, name string) error {
+	err := c.cs.CoreV1().PersistentVolumeClaims(c.namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
 
 // workspaceVolume returns the /workspace volume for a job: a PVC claim when
 // Workspace is set (cache reuse across runs), else an ephemeral emptyDir.
