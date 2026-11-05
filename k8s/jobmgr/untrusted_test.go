@@ -51,6 +51,24 @@ func TestUntrustedJobHasNoServiceAccountToken(t *testing.T) {
 	if sc.SeccompProfile == nil || sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
 		t.Error("seccomp RuntimeDefault must be set")
 	}
+	// runAsNonRoot WITHOUT an explicit UID makes kubelet reject every image
+	// whose USER is root (most of them) with CreateContainerConfigError. The
+	// numeric ids are what make the guarantee enforceable.
+	if sc.RunAsUser == nil || *sc.RunAsUser == 0 {
+		t.Error("an explicit runAsUser is required (runAsNonRoot alone rejects root images)")
+	}
+	if sc.RunAsGroup == nil || *sc.RunAsGroup == 0 {
+		t.Error("an explicit runAsGroup is required")
+	}
+	if *sc.RunAsUser != DefaultUntrustedID {
+		t.Errorf("runAsUser = %d, want the documented default %d", *sc.RunAsUser, DefaultUntrustedID)
+	}
+	// Pod-level ids + FSGroup so the emptyDir mounts are usable by a non-root
+	// process (an emptyDir is root:root 0755 by default).
+	psc := spec.SecurityContext
+	if psc == nil || psc.FSGroup == nil || *psc.FSGroup != DefaultUntrustedID {
+		t.Errorf("a pod FSGroup is required for writable emptyDirs: %+v", psc)
+	}
 	// /workspace and /tmp must still be writable, or a read-only rootfs breaks
 	// every real toolchain.
 	mounts := map[string]bool{}
