@@ -451,3 +451,28 @@ func TestDeleteReportsFailureInsteadOfLying(t *testing.T) {
 		t.Fatalf("the sandbox should still be visible (found=%v err=%v)", found, gerr)
 	}
 }
+
+// TestSandboxHasAShortTerminationGracePeriod pins the delete-latency fix.
+//
+// The k8s default grace period is 30s and the worker does not handle SIGTERM,
+// so every delete waited the full 30s; under Foreground propagation the
+// Deployment only disappears after its pod does, so a bounded delete timed out
+// and the sandbox looked undeletable.
+func TestSandboxHasAShortTerminationGracePeriod(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, _, err := c.Create(ctx, Spec{Name: "grace", Image: "img:1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	d, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, resourceName("grace"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := d.Spec.Template.Spec.TerminationGracePeriodSeconds
+	if g == nil {
+		t.Fatal("a sandbox must set terminationGracePeriodSeconds (the default delays every delete by 30s)")
+	}
+	if *g > 10 {
+		t.Fatalf("terminationGracePeriodSeconds = %d, want a short value", *g)
+	}
+}
