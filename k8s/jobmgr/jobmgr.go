@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -24,6 +25,8 @@ import (
 const (
 	LabelManaged  = "workspace/job"
 	LabelName     = "workspace/job-name"
+	LabelJob      = "workspace/job-owner"
+	LabelService  = "workspace/job-service"
 	AnnoImage     = "workspace/job-image"
 	AnnoCreator   = "workspace/job-creator"
 	AnnoSession   = "workspace/job-session"
@@ -67,6 +70,32 @@ type Spec struct {
 	// Owner/Session are stamped as annotations (List filters by owner).
 	Owner   string
 	Session string
+	// Untrusted marks the job as running UNTRUSTED code (the CI case). It forces
+	// automountServiceAccountToken=false, a non-root, read-only-rootfs,
+	// no-capabilities security context, and forbids `privileged`. A job that
+	// runs a tenant's arbitrary script must never be able to talk to the
+	// Kubernetes API with the namespace's ServiceAccount.
+	Untrusted bool
+	// Services are companion containers started alongside the job (a database,
+	// a cache). See ServiceSpec.
+	Services []ServiceSpec
+	// Workspace, when set, is mounted at /workspace: a PVC claim name for cache
+	// reuse, or "" for an ephemeral emptyDir.
+	Workspace string
+}
+
+// ServiceSpec is one companion container for a job.
+//
+// It is created as a single-replica Deployment + Service (so the job can resolve
+// it by name) and labelled with the job so a cleanup deletes both.
+type ServiceSpec struct {
+	// Name is the hostname the job uses (a DNS label).
+	Name    string
+	Image   string
+	Env     map[string]string
+	Ports   []int32
+	Command []string
+	Args    []string
 }
 
 // Job is a live job view.
@@ -249,6 +278,45 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 			},
 		},
 	}
+
+	// A job that runs UNTRUSTED code (CI) must never receive the namespace's
+	// ServiceAccount token, must not run as root, must not write to its root
+	// filesystem and must not gain capabilities. Without this, any tenant's
+	// workflow could talk to the Kubernetes API as the easyops ServiceAccount.
+	if s.Untrusted {
+		if s.ServiceAccountName != "" {
+			// An explicitly requested SA would hand the token back; refuse it.
+			return nil, fmt.Errorf("jobmgr: untrusted job %q must not set service_account", s.Name)
+		}
+		f := false
+		tr := true
+		nonRoot := true
+		job.Spec.Template.Spec.AutomountServiceAccountToken = &f
+		container.SecurityContext = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: &f,
+			Privileged:               &f,
+			ReadOnlyRootFilesystem:   &tr,
+			RunAsNonRoot:             &nonRoot,
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+		}
+		// A read-only root filesystem still needs writable scratch space for the
+		// checkout, the toolchain's caches and the step output file.
+		container.VolumeMounts = append(container.VolumeMounts,
+			corev1.VolumeMount{Name: "workspace", MountPath: "/workspace"},
+			corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"},
+		)
+		vols = append(vols,
+			corev1.Volume{Name: "tmp", VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			}},
+			workspaceVolume(s.Workspace),
+		)
+		job.Spec.Template.Spec.Volumes = vols
+		job.Spec.Template.Spec.Containers = []corev1.Container{container}
+	}
 	if s.ActiveDeadlineSeconds > 0 {
 		d := int64(s.ActiveDeadlineSeconds)
 		job.Spec.ActiveDeadlineSeconds = &d
@@ -264,7 +332,90 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Companion services come up FIRST-CLASS: a job that needs a database must
+	// be able to resolve it by name, so the Deployment+Service are created right
+	// after the Job (they race with the job's first pull, which is long enough in
+	// practice; a job that needs a hard guarantee should retry the connect).
+	if err := c.createServices(ctx, ns, s); err != nil {
+		return nil, err
+	}
 	return c.view(ctx, created), nil
+}
+
+// createServices creates one Deployment + Service per companion, labelled with
+// the job name so Delete removes them together.
+func (c *Client) createServices(ctx context.Context, ns string, s Spec) error {
+	for _, svc := range s.Services {
+		if svc.Name == "" || svc.Image == "" {
+			continue
+		}
+		labels := map[string]string{
+			LabelManaged: "1", LabelJob: s.Name, LabelService: svc.Name,
+		}
+		replicas := int32(1)
+		env := make([]corev1.EnvVar, 0, len(svc.Env))
+		for k, v := range svc.Env {
+			env = append(env, corev1.EnvVar{Name: k, Value: v})
+		}
+		ports := make([]corev1.ContainerPort, 0, len(svc.Ports))
+		for _, p := range svc.Ports {
+			ports = append(ports, corev1.ContainerPort{ContainerPort: p})
+		}
+		dep := &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: s.Name + "-" + svc.Name, Namespace: ns, Labels: labels},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{MatchLabels: labels},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: labels},
+					Spec: corev1.PodSpec{
+						AutomountServiceAccountToken: boolPtr(false),
+						Containers: []corev1.Container{{
+							Name: svc.Name, Image: svc.Image, Env: env,
+							Command: svc.Command, Args: svc.Args, Ports: ports,
+						}},
+					},
+				},
+			},
+		}
+		if _, err := c.cs.AppsV1().Deployments(ns).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("jobmgr: service %s: %w", svc.Name, err)
+		}
+		k8sSvc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: svc.Name, Namespace: ns, Labels: labels},
+			Spec: corev1.ServiceSpec{
+				Selector: labels,
+				Ports:    servicePorts(svc.Ports),
+			},
+		}
+		if _, err := c.cs.CoreV1().Services(ns).Create(ctx, k8sSvc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("jobmgr: service %s: %w", svc.Name, err)
+		}
+	}
+	return nil
+}
+
+func servicePorts(in []int32) []corev1.ServicePort {
+	out := make([]corev1.ServicePort, 0, len(in))
+	for _, p := range in {
+		out = append(out, corev1.ServicePort{Name: fmt.Sprintf("p%d", p), Port: p})
+	}
+	return out
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// workspaceVolume returns the /workspace volume for a job: a PVC claim when
+// Workspace is set (cache reuse across runs), else an ephemeral emptyDir.
+func workspaceVolume(claim string) corev1.Volume {
+	if claim == "" {
+		return corev1.Volume{Name: "workspace", VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		}}
+	}
+	return corev1.Volume{Name: "workspace", VolumeSource: corev1.VolumeSource{
+		PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: claim},
+	}}
 }
 
 // List returns the jobs owned by `owner` (empty owner = all managed jobs).
@@ -299,6 +450,22 @@ func (c *Client) Delete(ctx context.Context, name, propagation string) error {
 	if strings.EqualFold(propagation, "foreground") {
 		pol = metav1.DeletePropagationForeground
 	}
+	// Companion services are labelled with the job name, so they go with it.
+	// (ServiceInterface has no DeleteCollection, so list and delete one by one.)
+	sel := metav1.ListOptions{LabelSelector: LabelJob + "=" + name}
+	if list, err := c.cs.CoreV1().Services(c.namespace).List(ctx, sel); err == nil {
+		for i := range list.Items {
+			_ = c.cs.CoreV1().Services(c.namespace).Delete(ctx, list.Items[i].Name, metav1.DeleteOptions{})
+		}
+	}
+	if list, err := c.cs.AppsV1().Deployments(c.namespace).List(ctx, sel); err == nil {
+		prop := metav1.DeletePropagationBackground
+		for i := range list.Items {
+			_ = c.cs.AppsV1().Deployments(c.namespace).Delete(ctx, list.Items[i].Name,
+				metav1.DeleteOptions{PropagationPolicy: &prop})
+		}
+	}
+
 	err := c.cs.BatchV1().Jobs(c.namespace).Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &pol})
 	if apierrors.IsNotFound(err) {
 		return fmt.Errorf("job not found: %s", name)
