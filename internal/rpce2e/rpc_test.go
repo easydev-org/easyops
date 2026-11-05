@@ -526,13 +526,28 @@ func TestRPC_ImageSurface(t *testing.T) {
 	}
 }
 
-// TestRPC_WatchWorkspaceStream covers the live stream: an initial self-contained
-// snapshot frame, then at least one frame when something changes.
+// TestRPC_WatchWorkspaceStream covers the live stream: a self-contained snapshot
+// frame that really carries the owner's objects, then a frame flagged for the
+// kind that changed.
 func TestRPC_WatchWorkspaceStream(t *testing.T) {
 	h := newHarness(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	owner := "alice"
+
+	// Create the object FIRST. A proto3 repeated field cannot distinguish
+	// "empty" from "absent", so asserting on an empty namespace proves nothing:
+	// the frame would look the same whether the list was fetched (and empty) or
+	// skipped. With a real object present, a missing list is unambiguous.
+	name := fmt.Sprintf("rpc-watch-%d", time.Now().UnixNano())
+	if _, err := h.Client.CreateSandbox(ctx, &easyopsv1.CreateSandboxRequest{
+		Owner: owner, Name: name, Image: fixture(t, "worker:1"),
+	}); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	defer func() {
+		_, _ = h.Client.DeleteSandbox(context.Background(), &easyopsv1.DeleteSandboxRequest{Owner: owner, Name: name})
+	}()
 
 	stream, err := h.Client.WatchWorkspace(ctx, &easyopsv1.WatchWorkspaceRequest{Owner: owner})
 	if err != nil {
@@ -544,31 +559,49 @@ func TestRPC_WatchWorkspaceStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first frame: %v", err)
 	}
-	// Every frame is self-contained: the first one must carry all the
-	// owner-filtered lists.
-	if first.GetSandboxes() == nil && first.GetServices() == nil && first.GetPvcs() == nil {
-		t.Errorf("the snapshot frame carries no lists: %+v", first)
+	if !first.GetSnapshot() {
+		t.Errorf("the first frame must be the snapshot frame: %+v", first)
+	}
+	// Every frame is self-contained: the snapshot must carry the owner's lists.
+	var seen bool
+	for _, s := range first.GetSandboxes() {
+		if s.GetName() == name {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Errorf("the snapshot frame must carry the owner's sandboxes (looked for %q): %+v", name, first)
 	}
 
-	// Create a sandbox and expect a frame flagged for sandboxes.
-	name := fmt.Sprintf("rpc-watch-%d", time.Now().UnixNano())
+	// Creating a second sandbox must produce a frame flagged for sandboxes.
+	name2 := fmt.Sprintf("rpc-watch2-%d", time.Now().UnixNano())
 	if _, err := h.Client.CreateSandbox(ctx, &easyopsv1.CreateSandboxRequest{
-		Owner: owner, Name: name, Image: fixture(t, "worker:1"),
+		Owner: owner, Name: name2, Image: fixture(t, "worker:1"),
 	}); err != nil {
-		t.Fatalf("CreateSandbox: %v", err)
+		t.Fatalf("CreateSandbox (2): %v", err)
 	}
 	defer func() {
-		_, _ = h.Client.DeleteSandbox(context.Background(), &easyopsv1.DeleteSandboxRequest{Owner: owner, Name: name})
+		_, _ = h.Client.DeleteSandbox(context.Background(), &easyopsv1.DeleteSandboxRequest{Owner: owner, Name: name2})
 	}()
 
-	deadline := time.Now().Add(60 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		f, err := stream.Receive()
 		if err != nil {
 			t.Fatalf("next frame: %v", err)
 		}
 		if f.GetSandboxesChanged() {
-			return // observed the change
+			// Every frame is self-contained: it must carry the full list.
+			var found bool
+			for _, sb := range f.GetSandboxes() {
+				if sb.GetName() == name2 {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("a sandboxes_changed frame must be self-contained (missing %q)", name2)
+			}
+			return
 		}
 	}
 	t.Fatal("no sandboxes_changed frame arrived after creating a sandbox")
