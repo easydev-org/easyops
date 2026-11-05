@@ -88,9 +88,13 @@ kubectl -n "${NS}" run "buildkit-probe-$$" --rm -i --restart=Never \
   buildctl --addr tcp://buildkitd:1234 debug workers >/dev/null
 
 # The Go client runs on the host, so bridge the ClusterIP.
-kubectl -n "${NS}" port-forward svc/buildkitd 1234:1234 >/tmp/buildkitd-portforward.log 2>&1 &
+#
+# The forward MUST outlive this script: a trap that kills it on exit tears down
+# the tunnel before the tests run. It is detached with setsid so it is not in the
+# script's process group, and the CI job kills it in an `always()` step.
+setsid kubectl -n "${NS}" port-forward svc/buildkitd 1234:1234 \
+  >/tmp/buildkitd-portforward.log 2>&1 < /dev/null &
 FORWARD_PID=$!
-trap 'kill ${FORWARD_PID} 2>/dev/null || true' EXIT
 for _ in $(seq 1 60); do
   if (exec 3<>/dev/tcp/127.0.0.1/1234) 2>/dev/null; then
     exec 3<&- 3>&-
@@ -100,7 +104,7 @@ for _ in $(seq 1 60); do
 done
 
 ADDR="tcp://127.0.0.1:1234"
-echo "buildkitd ready at ${ADDR} (port-forwarded from buildkitd.${NS})"
+echo "buildkitd ready at ${ADDR} (port-forwarded from buildkitd.${NS}, pid ${FORWARD_PID})"
 if [ -n "${GITHUB_ENV:-}" ]; then
   {
     echo "EASYOPS_TEST_BUILDKIT_ADDR=${ADDR}"

@@ -5,6 +5,7 @@ package rpce2e
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -58,10 +59,16 @@ func newBuildHarness(t *testing.T) *harness {
 }
 
 // contextTar builds an in-memory build context.
+//
+// The archive is GZIPPED: imagebuild.Extract reads a .tar.gz (that is what the
+// gateway forwards, an easyvcs archive), and a plain tar is rejected with
+// "gzip: invalid header" — which is exactly how the first run of this suite
+// failed.
 func contextTar(t *testing.T, files map[string]string) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
 	for name, body := range files {
 		if err := tw.WriteHeader(&tar.Header{
 			Name: name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg,
@@ -73,6 +80,9 @@ func contextTar(t *testing.T, files map[string]string) []byte {
 		}
 	}
 	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()
