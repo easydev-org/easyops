@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -177,7 +178,10 @@ func TestRPC_BuildImageStreamReal(t *testing.T) {
 	var finalRef string
 	for {
 		ev, err := stream.Receive()
-		if err == io.EOF {
+		// connect v2 signals end-of-stream with a *connect.Error whose CAUSE is
+		// io.EOF (errSpecialEnvelope), not a bare io.EOF, so it must be matched
+		// with errors.Is.
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -282,6 +286,7 @@ func TestRPC_CreateBuildReal(t *testing.T) {
 
 	repo := fmt.Sprintf("easyops-fixtures/async-%d", time.Now().UnixNano())
 	created, err := h.Client.CreateBuild(ctx, &easyopsv1.CreateBuildRequest{
+		Owner:   "alice",
 		Archive: contextTar(t, map[string]string{"Dockerfile": imageDockerfile}),
 		Repo:    repo, Tag: "v1",
 	})
@@ -298,7 +303,7 @@ func TestRPC_CreateBuildReal(t *testing.T) {
 	deadline := time.Now().Add(6 * time.Minute)
 	var last string
 	for time.Now().Before(deadline) {
-		got, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Id: id})
+		got, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Owner: "alice", Id: id})
 		if err != nil {
 			t.Fatalf("GetBuild: %v", err)
 		}
@@ -337,21 +342,28 @@ func TestRPC_CancelBuildReal(t *testing.T) {
 	archive := contextTar(t, map[string]string{
 		"Dockerfile": "FROM busybox:1.36\nRUN sleep 120 && echo done\n",
 	})
+	// Owner is REQUIRED here: an unowned build is not writable by anyone (the A1
+	// policy), so CancelBuild would report found=false and cancellation would
+	// never happen.
 	created, err := h.Client.CreateBuild(ctx, &easyopsv1.CreateBuildRequest{
-		Archive: archive, Repo: "easyops-fixtures/cancel", Tag: "v1",
+		Owner: "alice", Archive: archive, Repo: "easyops-fixtures/cancel", Tag: "v1",
 	})
 	if err != nil {
 		t.Fatalf("CreateBuild: %v", err)
 	}
 	id := created.GetBuild().GetId()
 
-	if _, err := h.Client.CancelBuild(ctx, &easyopsv1.CancelBuildRequest{Id: id}); err != nil {
+	canceled, err := h.Client.CancelBuild(ctx, &easyopsv1.CancelBuildRequest{Owner: "alice", Id: id})
+	if err != nil {
 		t.Fatalf("CancelBuild: %v", err)
+	}
+	if !canceled.GetFound() {
+		t.Fatal("CancelBuild did not find the build it just created")
 	}
 
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
-		got, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Id: id})
+		got, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Owner: "alice", Id: id})
 		if err != nil {
 			t.Fatalf("GetBuild: %v", err)
 		}

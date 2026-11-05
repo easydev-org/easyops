@@ -45,7 +45,7 @@ func (s *Service) BuildImage(ctx context.Context, req *opsv1.BuildImageRequest) 
 		Cache:      cacheOptions(m.GetImageCache()),
 	})
 	if err != nil {
-		return nil, mapK8sErr(err)
+		return nil, mapBuildErr(err)
 	}
 	return &opsv1.BuildImageResponse{ImageRef: res.ImageRef, Log: res.Log}, nil
 }
@@ -127,7 +127,7 @@ func (s *Service) ImportImage(ctx context.Context, req *opsv1.ImportImageRequest
 		AuthUser: m.GetAuthUser(), AuthToken: m.GetAuthToken(),
 	})
 	if err != nil {
-		return nil, mapK8sErr(err)
+		return nil, mapBuildErr(err)
 	}
 	return &opsv1.ImportImageResponse{ImageRef: res.ImageRef, Log: res.Log}, nil
 }
