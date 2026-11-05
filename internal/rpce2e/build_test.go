@@ -89,11 +89,13 @@ func contextTar(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-// Dockerfile that writes a file, so the built image is provably OURS (not a
-// cached or pre-existing one).
+// Dockerfile that writes a marker file (so the image is provably OURS) AND echoes
+// to stdout, so the build log has content to capture. Redirecting everything to
+// the file leaves buildkit with nothing on st.Logs, which made the "log is not
+// empty" assertion fail even though the build succeeded.
 const imageDockerfile = `FROM busybox:1.36
 ARG CONTENT=default
-RUN echo "$CONTENT" > /marker.txt
+RUN echo "$CONTENT" > /marker.txt && echo "built with content=$CONTENT"
 CMD ["cat", "/marker.txt"]
 `
 
