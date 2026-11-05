@@ -97,6 +97,11 @@ jobs:
       - name: build and push fixture images
         run: ./scripts/fixture-images.sh
 
+      # buildkitd backs the image/build suites. It needs a port-forward because
+      # the Go client runs on the HOST while the daemon is a ClusterIP.
+      - name: deploy buildkitd
+        run: ./scripts/k3d-buildkit.sh
+
       - name: sanity-check the cluster
         run: |
           kubectl version
@@ -121,6 +126,9 @@ jobs:
       - name: delete the cluster
         if: always()
         run: |
+          # The port-forward is children of this job; killing it avoids a
+          # "port already in use" on a retried step.
+          pkill -f "port-forward svc/buildkitd" 2>/dev/null || true
           k3d cluster delete easyops-ci || true
           k3d registry delete easyops-registry || true
 

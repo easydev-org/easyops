@@ -91,5 +91,7 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     echo "EASYOPS_TEST_REGISTRY=${REGISTRY_INTERNAL}"
     # The host-side name for docker push.
     echo "EASYOPS_TEST_REGISTRY_HOST=127.0.0.1:${REGISTRY_PORT}"
+    # The host-side port, for the tests that query the registry's v2 API.
+    echo "EASYOPS_TEST_REGISTRY_PORT=${REGISTRY_PORT}"
   } >>"${GITHUB_ENV}"
 fi

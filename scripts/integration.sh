@@ -36,8 +36,10 @@ dump() {
 # -count=1 defeats the test cache: an integration result must never be reused.
 # -p 1 runs the packages SEQUENTIALLY: they share one cluster and one namespace,
 # and the sandbox/service suites are timing-sensitive.
+#
+# A 40m budget: the build suite pushes several images through a cold buildkitd.
 set +e
-CGO_ENABLED=0 go test -tags=integration -count=1 -p 1 -v -timeout 25m "${PKGS[@]}"
+CGO_ENABLED=0 go test -tags=integration -count=1 -p 1 -v -timeout 40m "${PKGS[@]}"
 rc=$?
 set -e
 
