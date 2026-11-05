@@ -70,6 +70,17 @@ func (s *Service) CreateJob(ctx context.Context, req *opsv1.CreateJobRequest) (*
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			"service_account is not allowed for a job (jobs never receive a token)")
 	}
+	// Credentials as Secret REFERENCES: easyops never sees the value, the kubelet
+	// injects it at container start.
+	for _, se := range req.GetSecretEnv() {
+		if se.GetEnv() == "" || se.GetSecret() == "" || se.GetKey() == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				"secret_env entries need env, secret and key")
+		}
+		spec.SecretEnv = append(spec.SecretEnv, jobmgr.SecretEnvVar{
+			Env: se.GetEnv(), Secret: se.GetSecret(), Key: se.GetKey(),
+		})
+	}
 	for _, v := range req.GetVolumes() {
 		spec.Volumes = append(spec.Volumes, jobmgr.VolumeMount{
 			Name: v.GetName(), Claim: v.GetClaim(), MountPath: v.GetMountPath(),

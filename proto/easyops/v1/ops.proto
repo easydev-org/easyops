@@ -857,6 +857,14 @@ message JobVolumeMount {
   bool read_only = 5;
 }
 
+// JobSecretEnv injects an environment variable from a KEY of an existing
+// Secret. The value is never sent over the wire or stored in the Job spec.
+message JobSecretEnv {
+  string env = 1;
+  string secret = 2;
+  string key = 3;
+}
+
 message CreateJobRequest {
   // owner is opaque and unvalidated (creator annotation + List* filter).
   string owner = 1;
@@ -892,6 +900,9 @@ message CreateJobRequest {
   bool wait = 19;
   // wait_seconds bounds `wait` (0 = the server default).
   int32 wait_seconds = 20;
+  // secret_env injects credentials as REFERENCES to an existing Secret, so a
+  // value never travels through the API or lands in the Job's spec.
+  repeated JobSecretEnv secret_env = 21;
 }
 message CreateJobResponse { JobInfo job = 1; }
 

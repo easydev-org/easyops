@@ -53,6 +53,12 @@ type Spec struct {
 	Command   []string
 	Args      []string
 	Env       map[string]string
+	// SecretEnv binds environment variables to KEYS of existing secrets.
+	//
+	// It exists so a CI job can receive a credential WITHOUT the value ever
+	// entering the Job spec (and therefore the apiserver's object store or any
+	// log): the kubelet injects it from the Secret at container start.
+	SecretEnv []SecretEnvVar
 	CPU       string
 	Memory    string
 	// RestartPolicy is "Never" (default) or "OnFailure".
@@ -93,6 +99,13 @@ type Spec struct {
 //
 // It is created as a single-replica Deployment + Service (so the job can resolve
 // it by name) and labelled with the job so a cleanup deletes both.
+// SecretEnvVar binds one environment variable to a key of a Secret.
+type SecretEnvVar struct {
+	Env    string
+	Secret string
+	Key    string
+}
+
 type ServiceSpec struct {
 	// Name is the hostname the job uses (a DNS label).
 	Name    string
@@ -222,9 +235,21 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 		backoff = *s.BackoffLimit
 	}
 
-	env := make([]corev1.EnvVar, 0, len(s.Env))
+	env := make([]corev1.EnvVar, 0, len(s.Env)+len(s.SecretEnv))
 	for k, v := range s.Env {
 		env = append(env, corev1.EnvVar{Name: k, Value: v})
+	}
+	// Secret-backed env: a REFERENCE, so the value never reaches this process.
+	for _, se := range s.SecretEnv {
+		if se.Env == "" || se.Secret == "" || se.Key == "" {
+			return nil, fmt.Errorf("jobmgr: secret env needs env/secret/key, got %+v", se)
+		}
+		env = append(env, corev1.EnvVar{Name: se.Env, ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: se.Secret},
+				Key:                  se.Key,
+			},
+		}})
 	}
 
 	container := corev1.Container{
