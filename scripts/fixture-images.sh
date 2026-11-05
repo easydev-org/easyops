@@ -23,6 +23,9 @@ trap 'rm -rf "$tmp"' EXIT
 # generated index.html is enough and is far more reliable than `nc`.
 cat >"$tmp/serve.sh" <<'EOF'
 #!/bin/sh
+# Log one startup line: busybox httpd does not log requests, and the suite
+# asserts the pod-log path works, so there must be SOMETHING to read.
+echo "worker starting port=${WORKER_PORT:-48080}"
 mkdir -p /www
 printf 'sandbox-ok token=%s\n' "${WORKER_TOKEN:-none}" > /www/index.html
 exec httpd -f -p "${WORKER_PORT:-48080}" -h /www

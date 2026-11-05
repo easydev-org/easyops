@@ -2,6 +2,7 @@ package sandboxmgr
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -74,5 +75,45 @@ func TestEventsBestEffort(t *testing.T) {
 	got := c.Events(ctx, "ev", 20)
 	if len(got) != 1 || got[0] != "BackOff: Back-off restarting failed container" {
 		t.Fatalf("events = %v", got)
+	}
+}
+
+// TestSandboxURLIsTheServiceNotThePod pins the stable-address rule.
+//
+// toSandbox used to build the URL from the POD's name (wm-x-<rs>-<pod>), so the
+// reported address changed whenever the Deployment replaced its pod — a rollout
+// or a crash-restart silently broke any caller that had cached the URL. The
+// Service is named after the Deployment, which is stable for the sandbox's
+// whole life.
+func TestSandboxURLIsTheServiceNotThePod(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, _, err := c.Create(ctx, Spec{Name: "urltest", Image: "img:1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// Simulate the Deployment having created a pod (the fake client does not run
+	// a ReplicaSet controller).
+	res := resourceName("urltest")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: res + "-58fd8b7767-q25s4", Namespace: c.namespace,
+			Labels:      map[string]string{LabelManaged: "1", LabelName: "urltest"},
+			Annotations: map[string]string{AnnoImage: "img:1"},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+	if _, err := c.cs.CoreV1().Pods(c.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	sb, found, err := c.Get(ctx, "urltest")
+	if err != nil || !found {
+		t.Fatalf("get: found=%v err=%v", found, err)
+	}
+	want := c.ServiceDNS(res)
+	if sb.URL != want {
+		t.Fatalf("URL = %q, want the Service address %q (not the pod name)", sb.URL, want)
+	}
+	if strings.Contains(sb.URL, "58fd8b7767") {
+		t.Fatalf("URL must never contain the ReplicaSet hash: %q", sb.URL)
 	}
 }

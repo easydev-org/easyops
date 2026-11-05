@@ -512,8 +512,13 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 	if err := c.deleteObjects(ctx, res); err != nil {
 		return false, err
 	}
-	// Wait for the Job to be gone (deletion is asynchronous; the Job's pod is
-	// garbage-collected with it).
+	// Wait for the Deployment (and, under Foreground propagation, its pod) to be
+	// gone, so an immediate List/Get does not still show it as Terminating.
+	//
+	// A timeout is NOT success. The previous version fell out of the loop and
+	// returned (true, nil) even when the object was still there, so a caller that
+	// trusted it saw the sandbox "deleted" while Get still returned it — and a
+	// retry then deleted it for real, reporting a second successful deletion.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
@@ -521,11 +526,11 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 		}
 		select {
 		case <-ctx.Done():
-			return true, ctx.Err()
+			return false, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return true, nil
+	return false, fmt.Errorf("sandbox %s: deletion was issued but the Deployment is still present after 30s", name)
 }
 
 // Resolve returns the URL + bearer token for a sandbox.

@@ -47,6 +47,10 @@ func TestSandboxLifecycle(t *testing.T) {
 
 	// 2. Resolve reads the Service URL and the SAME token Create minted, but from
 	//    the Secret (i.e. through k8s, not from process memory).
+	//
+	//    The URL must ALSO be the sandbox's stable Service address, not the
+	//    pod's: using the pod name made the reported URL change on every rollout
+	//    or crash-restart, breaking any caller that cached it.
 	url, tok, err := c.Resolve(ctx, name)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -56,6 +60,18 @@ func TestSandboxLifecycle(t *testing.T) {
 	}
 	if url != ready.URL {
 		t.Errorf("resolve url = %q, ready url = %q", url, ready.URL)
+	}
+	// The URL must be the Deployment's Service, never the pod's: a pod name
+	// changes on every rollout, so a cached URL would break.
+	wantHost := resourceName(name) + "." + c.Namespace() + ".svc.cluster.local"
+	if !strings.Contains(url, wantHost) {
+		t.Errorf("url = %q, want the stable Service host %q (not the pod name)", url, wantHost)
+	}
+	for _, pod := range strings.Split(url, ".") {
+		if strings.Count(pod, "-") >= 4 {
+			t.Errorf("url %q looks like it contains a pod name", url)
+			break
+		}
 	}
 
 	// 3. The worker is reachable THROUGH THE SERVICE on port 80 and echoes the
@@ -68,13 +84,15 @@ func TestSandboxLifecycle(t *testing.T) {
 		t.Errorf("the worker did not receive WORKER_TOKEN from the Secret: %q", body)
 	}
 
-	// 4. Logs are readable from the real pod.
+	// 4. Logs are readable from the real pod. The fixture logs one line at
+	//    startup (busybox httpd does not log requests), which is enough to prove
+	//    the log path works end to end.
 	lines, err := c.Logs(ctx, name, LogOptions{TailLines: 50})
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
 	if len(lines) == 0 {
-		t.Error("expected some worker log output")
+		t.Errorf("expected the worker's startup log line, got none")
 	}
 
 	// 5. List sees it.
