@@ -13,6 +13,9 @@ permissions:
 
 env:
   CGO_ENABLED: "0"
+  # `gh release view` needs a token; the implicit GITHUB_TOKEN is enough for
+  # reading a release in a sibling PUBLIC repo, but it must be exported.
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   build:
