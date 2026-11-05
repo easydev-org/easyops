@@ -18,40 +18,57 @@ func errNoJobBackend() error {
 	return connect.NewError(connect.CodeUnavailable, "jobs backend is not configured")
 }
 
-// jobTimeout bounds CreateJob's wait for the job to reach a terminal state.
+// jobTimeout bounds CreateJob's OPT-IN wait for a terminal state.
 // A job that is still running at the deadline is returned as `active`
 // (non-fatal) — the caller then polls GetJob / JobLogs.
 const jobTimeout = 5 * time.Minute
 
-// CreateJob starts a run-to-completion Job (batch/v1). It waits briefly for a
-// terminal state so the common case (a short command) returns its result
-// inline; a longer job comes back `active`.
+// CreateJob starts a run-to-completion Job (batch/v1).
+//
+// It returns as soon as the object exists unless the caller sets `wait`: a CI
+// step is submitted and then polled, and blocking every create for up to the
+// timeout made the RPC unusable for long jobs (and hung any test that did not
+// expect it). With `wait`, a short command's result comes back inline.
 func (s *Service) CreateJob(ctx context.Context, req *opsv1.CreateJobRequest) (*opsv1.CreateJobResponse, error) {
 	if s.jobs == nil {
 		return nil, errNoJobBackend()
 	}
 	spec := jobmgr.Spec{
-		Namespace:               req.GetNamespace(),
-		Name:                    req.GetName(),
+		Name: req.GetName(),
+		// Namespace is the caller's TENANT-INTERNAL namespace, never a real
+		// Kubernetes namespace. jobmgr would use a non-empty value to override
+		// its own namespace, so passing it through would let ANY caller run a
+		// container in ANY namespace of the cluster — a full tenant escape. The
+		// server pins the k8s namespace from its own config; req.namespace is
+		// carried as the tenant label instead.
+		Namespace:               "",
 		Image:                   req.GetImage(),
 		Command:                 req.GetCommand(),
 		Args:                    req.GetArgs(),
 		Env:                     req.GetEnv(),
 		CPU:                     req.GetCpu(),
 		Memory:                  req.GetMemory(),
+		Session:                 req.GetSession(),
 		RestartPolicy:           req.GetRestartPolicy(),
 		ActiveDeadlineSeconds:   req.GetActiveDeadlineSeconds(),
 		TTLSecondsAfterFinished: req.GetTtlSecondsAfterFinished(),
 		NodeSelector:            req.GetNodeSelector(),
 		Owner:                   req.GetOwner(),
-		Session:                 req.GetSession(),
+		Tenant:                  req.GetNamespace(),
+		// A Job runs an arbitrary container to completion (a test run, a
+		// migration, a build): that is untrusted code by definition, so it must
+		// not receive the namespace's ServiceAccount token or any capability.
+		Untrusted: true,
 	}
 	if bl := req.GetBackoffLimit(); bl > 0 {
 		v := bl
 		spec.BackoffLimit = &v
 	}
 	if sa := req.GetServiceAccount(); len(sa) > 0 {
-		spec.ServiceAccountName = sa[0]
+		// A caller-supplied ServiceAccount would hand the job a token; the
+		// untrusted hardening refuses it (defence in depth).
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			"service_account is not allowed for a job (jobs never receive a token)")
 	}
 	for _, v := range req.GetVolumes() {
 		spec.Volumes = append(spec.Volumes, jobmgr.VolumeMount{
@@ -66,9 +83,15 @@ func (s *Service) CreateJob(ctx context.Context, req *opsv1.CreateJobRequest) (*
 		}
 		return nil, mapK8sErr(err)
 	}
-	// Wait (bounded) for completion so a short job answers inline.
-	if done, werr := s.jobs.Wait(ctx, j.Name, jobTimeout); werr == nil {
-		j = done
+	// Only an explicit `wait` blocks; the default is submit-and-poll.
+	if req.GetWait() {
+		timeout := jobTimeout
+		if secs := req.GetWaitSeconds(); secs > 0 {
+			timeout = time.Duration(secs) * time.Second
+		}
+		if done, werr := s.jobs.Wait(ctx, j.Name, timeout); werr == nil {
+			j = done
+		}
 	}
 	return &opsv1.CreateJobResponse{Job: jobToProto(j)}, nil
 }

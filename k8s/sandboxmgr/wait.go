@@ -9,17 +9,21 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// WaitReady polls until the sandbox's Service address accepts a TCP connection
-// (the same path every later call uses), or the timeout elapses. It checks both
-// the pod IP and the Service DNS to avoid the kube-proxy propagation race.
+// WaitReady polls until the sandbox's worker is reachable, or the timeout
+// elapses. It checks the pod's OWN readiness and the worker port on the pod IP.
+//
+// It deliberately does NOT dial `<svc>.<ns>.svc.cluster.local`: easyops runs
+// OUTSIDE the cluster it manages (an explicit kubeconfig, often another
+// namespace's identity), so cluster-only DNS does not resolve here. Requiring it
+// made WaitReady fail for a perfectly healthy sandbox — the pod was 1/1 Running
+// and the Service was correct, but the check could never succeed from the
+// server's process. The Service address is what CALLERS use; this is a liveness
+// check of the worker, so the pod IP is the right thing to probe.
 func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
 	res := resourceName(name)
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
-	// The Service fronts the worker on ServicePort (80); the pod IP is dialed on
-	// the worker's own WorkerPort.
-	svcAddr := fmt.Sprintf("%s.%s.svc.cluster.local:%d", res, c.namespace, ServicePort)
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		pod, perr := c.depPod(ctx, res)
@@ -42,11 +46,10 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 			if pod.Status.Phase == "Failed" {
 				return fmt.Errorf("sandbox %s exited: %s", name, firstFailureReason(pod))
 			}
-			if pod.Status.Phase == "Running" && pod.Status.PodIP != "" {
-				if dialAddr(ctx, fmt.Sprintf("%s:%d", pod.Status.PodIP, WorkerPort)) == nil &&
-					dialAddr(ctx, svcAddr) == nil {
-					return nil
-				}
+			if pod.Status.Phase == "Running" && pod.Status.PodIP != "" &&
+				workerReady(pod) &&
+				dialAddr(ctx, fmt.Sprintf("%s:%d", pod.Status.PodIP, WorkerPort)) == nil {
+				return nil
 			}
 		}
 		select {
@@ -56,6 +59,21 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 		}
 	}
 	return fmt.Errorf("sandbox %s not healthy within %s", name, timeout)
+}
+
+// workerReady reports whether the worker container has passed its readiness
+// probe (all containers ready). A running pod whose container has not reported
+// Ready yet is still starting (the httpd is bound but has not answered).
+func workerReady(p *corev1.Pod) bool {
+	if len(p.Status.ContainerStatuses) == 0 {
+		return false
+	}
+	for _, cs := range p.Status.ContainerStatuses {
+		if !cs.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // firstFailureReason returns the first container's failure reason+message (e.g.

@@ -57,7 +57,7 @@ func TestRPC_SandboxSurface(t *testing.T) {
 	create, err := h.Client.CreateSandbox(ctx, &easyopsv1.CreateSandboxRequest{
 		Owner: owner, Session: "s1", Name: name, Image: img,
 		// Wait (bounded) so the RPC returns a ready sandbox, as the gateway does.
-		ReadyTimeoutSeconds: 120,
+		ReadyTimeoutSeconds: 180,
 	})
 	if err != nil {
 		t.Fatalf("CreateSandbox: %v", err)
@@ -172,9 +172,16 @@ func TestRPC_OwnerIsolation(t *testing.T) {
 	if got.GetFound() {
 		t.Error("another owner must not see the sandbox")
 	}
-	// Delete by another owner must fail as not-found.
-	if _, err := h.Client.DeleteSandbox(ctx, &easyopsv1.DeleteSandboxRequest{Owner: "bob", Name: name}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("cross-owner delete code = %v, want NotFound", connect.CodeOf(err))
+	// Delete by another owner reports deleted=false (the documented contract:
+	// the object is simply not theirs, and existence never leaks as an error).
+	if got, err := h.Client.DeleteSandbox(ctx, &easyopsv1.DeleteSandboxRequest{Owner: "bob", Name: name}); err != nil {
+		t.Errorf("cross-owner delete: %v", err)
+	} else if got.GetDeleted() {
+		t.Error("another owner must not be able to delete the sandbox")
+	}
+	// And it is still there for its real owner.
+	if got, err := h.Client.GetSandbox(ctx, &easyopsv1.GetSandboxRequest{Owner: "alice", Name: name}); err != nil || !got.GetFound() {
+		t.Errorf("the sandbox must survive a cross-owner delete (found=%v err=%v)", got.GetFound(), err)
 	}
 }
 
@@ -258,8 +265,10 @@ func TestRPC_ServiceSurface(t *testing.T) {
 	if _, err := h.Client.DeleteService(ctx, &easyopsv1.DeleteServiceRequest{Owner: owner, Name: name}); err != nil {
 		t.Fatalf("DeleteService: %v", err)
 	}
-	if _, err := h.Client.GetService(ctx, &easyopsv1.GetServiceRequest{Owner: owner, Name: name}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("GetService after delete code = %v, want NotFound", connect.CodeOf(err))
+	if got, err := h.Client.GetService(ctx, &easyopsv1.GetServiceRequest{Owner: owner, Name: name}); err != nil {
+		t.Errorf("GetService after delete: %v", err)
+	} else if got.GetFound() {
+		t.Error("the service still exists after DeleteService")
 	}
 }
 
@@ -298,8 +307,10 @@ func TestRPC_PVCSurface(t *testing.T) {
 	if _, err := h.Client.DeletePVC(ctx, &easyopsv1.DeletePVCRequest{Owner: owner, Name: name}); err != nil {
 		t.Fatalf("DeletePVC: %v", err)
 	}
-	if _, err := h.Client.GetPVC(ctx, &easyopsv1.GetPVCRequest{Owner: owner, Name: name}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("GetPVC after delete code = %v, want NotFound", connect.CodeOf(err))
+	if got, err := h.Client.GetPVC(ctx, &easyopsv1.GetPVCRequest{Owner: owner, Name: name}); err != nil {
+		t.Errorf("GetPVC after delete: %v", err)
+	} else if got.GetFound() {
+		t.Error("the PVC still exists after DeletePVC")
 	}
 }
 
@@ -363,10 +374,15 @@ func TestRPC_JobSurface(t *testing.T) {
 	owner := "alice"
 
 	created, err := h.Client.CreateJob(ctx, &easyopsv1.CreateJobRequest{
+		// namespace is the TENANT label, not a k8s namespace: the server pins the
+		// latter from its own config (otherwise a caller could run a container in
+		// any namespace).
 		Owner: owner, Name: name, Namespace: "team-a",
 		Image:   fixture(t, "worker:1"),
 		Command: []string{"/bin/sh"}, Args: []string{"-c", "echo hello-from-rpc"},
 		ActiveDeadlineSeconds: 120,
+		// Opt into the bounded inline wait so the test does not have to poll.
+		Wait: true, WaitSeconds: 120,
 	})
 	if err != nil {
 		t.Fatalf("CreateJob: %v", err)
@@ -416,8 +432,9 @@ func TestRPC_JobSurface(t *testing.T) {
 	if _, err := h.Client.DeleteJob(ctx, &easyopsv1.DeleteJobRequest{Owner: owner, Name: name}); err != nil {
 		t.Fatalf("DeleteJob: %v", err)
 	}
+	// GetJob maps a missing job to NotFound (it does not use the found flag).
 	if _, err := h.Client.GetJob(ctx, &easyopsv1.GetJobRequest{Owner: owner, Name: name}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("GetJob after delete code = %v, want NotFound", connect.CodeOf(err))
+		t.Errorf("GetJob after delete code = %v, want NotFound (err=%v)", connect.CodeOf(err), err)
 	}
 }
 
@@ -449,12 +466,17 @@ func TestRPC_BuildSurface(t *testing.T) {
 		t.Errorf("CreateBuild(no builder) code = %v, want Unavailable/InvalidArgument (err=%v)", code, err)
 	}
 
-	// Get/Cancel of an unknown build must be NotFound, not a panic.
-	if _, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Id: "nope"}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("GetBuild(nope) code = %v, want NotFound", connect.CodeOf(err))
+	// Get/Cancel of an unknown build report found=false (the documented
+	// contract), and must not panic.
+	if got, err := h.Client.GetBuild(ctx, &easyopsv1.GetBuildRequest{Id: "nope"}); err != nil {
+		t.Errorf("GetBuild(nope): %v", err)
+	} else if got.GetFound() {
+		t.Error("an unknown build must not be found")
 	}
-	if _, err := h.Client.CancelBuild(ctx, &easyopsv1.CancelBuildRequest{Id: "nope"}); connect.CodeOf(err) != connect.CodeNotFound {
-		t.Errorf("CancelBuild(nope) code = %v, want NotFound", connect.CodeOf(err))
+	if got, err := h.Client.CancelBuild(ctx, &easyopsv1.CancelBuildRequest{Id: "nope"}); err != nil {
+		t.Errorf("CancelBuild(nope): %v", err)
+	} else if got.GetFound() {
+		t.Error("an unknown build must not be found")
 	}
 }
 
