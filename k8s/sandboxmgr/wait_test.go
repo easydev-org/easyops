@@ -90,19 +90,17 @@ func TestWaitReadyIgnoresContainerCreating(t *testing.T) {
 	}
 }
 
-// TestWaitReadyDoesNotRequireClusterDNS pins that the readiness check works from
-// OUTSIDE the managed cluster.
+// TestWaitReadyDoesNotRequireNetworkAccess pins that the readiness check works
+// from OUTSIDE the managed cluster.
 //
 // easyops runs with an explicit kubeconfig and often in a different cluster or
-// namespace from the sandboxes it manages, so `<svc>.<ns>.svc.cluster.local` does
-// not resolve in its own process. WaitReady used to require BOTH the pod IP and
-// that cluster-only name, so it timed out for a perfectly healthy sandbox (the
-// k3d run showed a 1/1 Running pod and a "not healthy within 2m" error).
-//
-// Here the pod IP is a closed port (nothing listens), so the assertion is about
-// the DNS requirement, not about connectivity: WaitReady must reach the "not
-// ready" state and TIME OUT rather than fail with an address-resolution error.
-func TestWaitReadyDoesNotRequireClusterDNS(t *testing.T) {
+// namespace from the sandboxes it manages, so neither `<svc>.<ns>.svc...` NOR the
+// pod IP is reachable from its own process. WaitReady used to require dialing
+// them, so it timed out for a perfectly healthy sandbox (the k3d runs showed a
+// 1/1 Running pod, a correct Service, and "not healthy within 3m"). Readiness is
+// now the kubelet's verdict, backed by a real TCP readiness probe on the worker
+// port.
+func TestWaitReadyDoesNotRequireNetworkAccess(t *testing.T) {
 	c := newTestClient()
 	ctx := context.Background()
 	if _, _, err := c.Create(ctx, Spec{Name: "nodns", Image: "img:1"}); err != nil {
@@ -126,15 +124,39 @@ func TestWaitReadyDoesNotRequireClusterDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 127.0.0.1:WorkerPort has no listener, so it times out — but the error must
-	// be the generic "not healthy" one, never a DNS/lookup failure, and the check
-	// must not depend on cluster DNS to even TRY.
-	err := c.WaitReady(ctx, "nodns", 1500*time.Millisecond)
-	if err == nil {
-		t.Fatal("a closed worker port must not be reported ready")
+	// The pod reports Ready and its IP is unroutable from this process. WaitReady
+	// must succeed anyway: it must NOT try to reach the pod or the Service.
+	if err := c.WaitReady(ctx, "nodns", 2*time.Second); err != nil {
+		t.Fatalf("WaitReady must not depend on network access to the cluster: %v", err)
 	}
-	if strings.Contains(strings.ToLower(err.Error()), "no such host") ||
-		strings.Contains(err.Error(), "svc.cluster.local") {
-		t.Fatalf("WaitReady must not depend on cluster DNS: %v", err)
+}
+
+// TestWaitReadyReturnsWhenTheKubeletSaysReady: readiness is the pod condition,
+// not a network probe from the server's process.
+func TestWaitReadyReturnsWhenTheKubeletSaysReady(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, _, err := c.Create(ctx, Spec{Name: "readypod", Image: "img:1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	res := resourceName("readypod")
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: res + "-abc-x1", Namespace: c.namespace,
+			Labels: map[string]string{LabelManaged: "1", LabelName: "readypod"},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			PodIP: "203.0.113.7", // unroutable on purpose: the check must not dial
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "worker", Ready: true,
+			}},
+		},
+	}
+	if _, err := c.cs.CoreV1().Pods(c.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.WaitReady(ctx, "readypod", 2*time.Second); err != nil {
+		t.Fatalf("WaitReady must trust the pod's Ready condition: %v", err)
 	}
 }

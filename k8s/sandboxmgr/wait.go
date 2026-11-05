@@ -3,22 +3,25 @@ package sandboxmgr
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 )
 
-// WaitReady polls until the sandbox's worker is reachable, or the timeout
-// elapses. It checks the pod's OWN readiness and the worker port on the pod IP.
+// WaitReady polls until the sandbox's worker is READY, or the timeout elapses.
 //
-// It deliberately does NOT dial `<svc>.<ns>.svc.cluster.local`: easyops runs
-// OUTSIDE the cluster it manages (an explicit kubeconfig, often another
-// namespace's identity), so cluster-only DNS does not resolve here. Requiring it
-// made WaitReady fail for a perfectly healthy sandbox — the pod was 1/1 Running
-// and the Service was correct, but the check could never succeed from the
-// server's process. The Service address is what CALLERS use; this is a liveness
-// check of the worker, so the pod IP is the right thing to probe.
+// Readiness is the kubelet's verdict (the pod's containers report Ready), which
+// is why the sandbox container carries a TCP readiness probe on WorkerPort: that
+// probe only passes once the worker has actually bound its port.
+//
+// It deliberately does NOT dial the pod IP or `<svc>.<ns>.svc.cluster.local`.
+// Neither is reachable from an easyops that runs OUTSIDE the cluster it manages —
+// which k8sconfig explicitly supports (an injected kubeconfig may point at
+// another cluster or another namespace's identity). The old dial-based check made
+// CreateSandbox fail with "not healthy within 2m" for a pod that was 1/1 Running
+// and a Service that was perfectly correct, because the check could never
+// succeed from the server's own process. Connectivity is what CALLERS verify;
+// this is a lifecycle check.
 func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Duration) error {
 	res := resourceName(name)
 	if timeout <= 0 {
@@ -46,9 +49,7 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 			if pod.Status.Phase == "Failed" {
 				return fmt.Errorf("sandbox %s exited: %s", name, firstFailureReason(pod))
 			}
-			if pod.Status.Phase == "Running" && pod.Status.PodIP != "" &&
-				workerReady(pod) &&
-				dialAddr(ctx, fmt.Sprintf("%s:%d", pod.Status.PodIP, WorkerPort)) == nil {
+			if pod.Status.Phase == "Running" && workerReady(pod) {
 				return nil
 			}
 		}
@@ -92,15 +93,6 @@ func firstFailureReason(pod *corev1.Pod) string {
 		}
 	}
 	return "pod failed"
-}
-
-func dialAddr(ctx context.Context, addr string) error {
-	d := net.Dialer{Timeout: time.Second}
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
-	}
-	return conn.Close()
 }
 
 // firstWaitingReason returns a container's CURRENT waiting reason when it is a
