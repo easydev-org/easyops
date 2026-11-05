@@ -232,12 +232,17 @@ func TestWorkspacePVCIsMountable(t *testing.T) {
 }
 
 // TestCompanionServiceIsResolvable pins the `services:` contract in a real
-// cluster: a companion is REACHABLE before the job's first command runs.
+// cluster: a companion is REACHABLE from the job by its name.
 //
-// The first version of this test failed with "name not resolvable": the Job and
-// its companion were created at the same instant, so the job started before the
-// Service had endpoints. The manager now creates the companion first and waits
-// for a ready endpoint, which is what makes this test deterministic.
+// Two lessons from writing this:
+//
+//   - The first version created the Job and its companion at the same instant,
+//     so the job started before the Service had endpoints. The manager now
+//     creates the companion first and waits for a ready endpoint.
+//   - The assertion must be a CONNECTION, not `nslookup`: busybox's nslookup
+//     with a single-label name is unreliable (musl + search domains), and DNS
+//     answering says nothing about the port being reachable. Connecting with a
+//     short retry is what a real job would do, and it is deterministic.
 func TestCompanionServiceIsResolvable(t *testing.T) {
 	cfg := clusterConfig(t)
 	// Give the companion time to pull on a cold node.
@@ -252,9 +257,16 @@ func TestCompanionServiceIsResolvable(t *testing.T) {
 		Name: name, Image: "busybox:1.36",
 		Command: []string{"/bin/sh"}, Args: []string{"-c", `
 			set -e
-			# Resolve AND connect: DNS alone is not the contract, an endpoint is.
-			nslookup pg >/dev/null 2>&1 || { echo "NO_DNS"; exit 1; }
-			echo "service-ok"
+			# Connect to the companion by NAME. A few retries because kube-proxy's
+			# rules can lag the endpoint by a moment; a job would do the same.
+			for i in $(seq 1 30); do
+			  if wget -q -T 2 -O /tmp/page http://pg/ 2>/dev/null; then
+			    grep -qi "welcome to nginx" /tmp/page && { echo "service-ok"; exit 0; }
+			  fi
+			  sleep 1
+			done
+			echo "NO_SERVICE"
+			exit 1
 		`},
 		Untrusted: true,
 		Services: []ServiceSpec{{
@@ -273,6 +285,6 @@ func TestCompanionServiceIsResolvable(t *testing.T) {
 		t.Fatalf("job = %s (reason=%q)\n%s", done.State, done.Reason, logs)
 	}
 	if !strings.Contains(logs, "service-ok") {
-		t.Fatalf("the companion was not resolvable:\n%s", logs)
+		t.Fatalf("the companion was not reachable by name:\n%s", logs)
 	}
 }
