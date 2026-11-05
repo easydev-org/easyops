@@ -584,27 +584,30 @@ func TestRPC_WatchWorkspaceStream(t *testing.T) {
 		_, _ = h.Client.DeleteSandbox(context.Background(), &easyopsv1.DeleteSandboxRequest{Owner: owner, Name: name2})
 	}()
 
+	// Keep receiving until a frame CONTAINS the new sandbox. Unrelated changes
+	// (the first sandbox's pod going Ready, a restart) also emit frames, and the
+	// stream coalesces them, so "the next frame" is not necessarily ours — the
+	// contract is that a frame eventually carries every object, self-contained.
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		f, err := stream.Receive()
 		if err != nil {
 			t.Fatalf("next frame: %v", err)
 		}
-		if f.GetSandboxesChanged() {
-			// Every frame is self-contained: it must carry the full list.
-			var found bool
-			for _, sb := range f.GetSandboxes() {
-				if sb.GetName() == name2 {
-					found = true
-				}
+		if !f.GetSandboxesChanged() {
+			continue
+		}
+		var found bool
+		for _, sb := range f.GetSandboxes() {
+			if sb.GetName() == name2 {
+				found = true
 			}
-			if !found {
-				t.Errorf("a sandboxes_changed frame must be self-contained (missing %q)", name2)
-			}
+		}
+		if found {
 			return
 		}
 	}
-	t.Fatal("no sandboxes_changed frame arrived after creating a sandbox")
+	t.Fatalf("no sandboxes_changed frame ever carried %q", name2)
 }
 
 // TestRPC_ApplyManifestRejectsGarbage: a bad manifest must be InvalidArgument,
