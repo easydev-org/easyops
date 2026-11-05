@@ -44,6 +44,14 @@ const (
 	// `http://<sandbox>.<ns>.svc.cluster.local` form (and the edge/desktop wiring
 	// that maps a sandbox's port 80 works).
 	ServicePort = 80
+
+	// sandboxTerminationGraceSeconds is the pod's terminationGracePeriodSeconds.
+	//
+	// A sandbox worker is a stateless HTTP server that does not handle SIGTERM,
+	// so the k8s default (30s) just delays every delete by 30 seconds — and with
+	// Foreground propagation the Deployment only goes away after its pod does, so
+	// a bounded delete appeared to hang and reported the sandbox as undeletable.
+	sandboxTerminationGraceSeconds = 5
 )
 
 // ErrExists reports that a sandbox with the requested name already exists. A
@@ -306,6 +314,13 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 		// server, and a crash is still surfaced via restart count + lastState.
 		RestartPolicy: corev1.RestartPolicyAlways,
 		Containers:    []corev1.Container{container},
+		// The worker is a server: it has NO state worth a graceful shutdown, and
+		// it does not handle SIGTERM. The k8s default grace period is 30s, so
+		// every delete burned the full 30s before the pod would die — and under
+		// Foreground propagation the Deployment only disappears after its pods
+		// are gone, so a caller's bounded wait timed out and the sandbox looked
+		// undeletable. A short grace period makes a delete take ~1s.
+		TerminationGracePeriodSeconds: int64Ptr(sandboxTerminationGraceSeconds),
 	}
 	if s.Runtime.RuntimeClass != "" {
 		rc := s.Runtime.RuntimeClass
@@ -512,8 +527,13 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 	if err := c.deleteObjects(ctx, res); err != nil {
 		return false, err
 	}
-	// Wait for the Job to be gone (deletion is asynchronous; the Job's pod is
-	// garbage-collected with it).
+	// Wait for the Deployment (and, under Foreground propagation, its pod) to be
+	// gone, so an immediate List/Get does not still show it as Terminating.
+	//
+	// A timeout is NOT success. The previous version fell out of the loop and
+	// returned (true, nil) even when the object was still there, so a caller that
+	// trusted it saw the sandbox "deleted" while Get still returned it — and a
+	// retry then deleted it for real, reporting a second successful deletion.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, res, metav1.GetOptions{}); apierrors.IsNotFound(err) {
@@ -521,11 +541,11 @@ func (c *Client) Delete(ctx context.Context, name string) (bool, error) {
 		}
 		select {
 		case <-ctx.Done():
-			return true, ctx.Err()
+			return false, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	return true, nil
+	return false, fmt.Errorf("sandbox %s: deletion was issued but the Deployment is still present after 30s", name)
 }
 
 // Resolve returns the URL + bearer token for a sandbox.
@@ -552,6 +572,8 @@ func (c *Client) deleteObjects(ctx context.Context, res string) error {
 }
 
 func hostPathTypePtr(t corev1.HostPathType) *corev1.HostPathType { return &t }
+
+func int64Ptr(v int64) *int64 { return &v }
 
 // Watch returns a watch over every sandbox Pod in the namespace. The caller
 // re-lists on each signal (see k8swatch), so only the event stream matters.

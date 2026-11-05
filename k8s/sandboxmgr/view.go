@@ -64,12 +64,19 @@ func toSandbox(c *Client, p *corev1.Pod) Sandbox {
 	if created == 0 {
 		created = time.Now().UnixMilli()
 	}
+	// The URL is the SANDBOX's stable Service address, not the pod's.
+	//
+	// p.Name is the pod (wm-x-58fd8b7767-q25s4): using it made the reported URL
+	// change every time the Deployment replaced its pod, so a caller that cached
+	// the URL broke after a rollout or a crash-restart. The Service is named
+	// after the Deployment (resourceName), which is stable for the sandbox's
+	// whole life.
 	return Sandbox{
 		Name:             p.Labels[LabelName],
 		Image:            p.Annotations[AnnoImage],
 		Phase:            phase,
 		Ready:            ready,
-		URL:              c.ServiceDNS(p.Name),
+		URL:              c.ServiceDNS(resourceName(p.Labels[LabelName])),
 		Creator:          p.Annotations[AnnoCreator],
 		Session:          p.Annotations[AnnoSession],
 		CreatedAt:        created,

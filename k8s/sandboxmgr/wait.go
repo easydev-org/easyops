@@ -27,8 +27,18 @@ func (c *Client) WaitReady(ctx context.Context, name string, timeout time.Durati
 			pod = nil
 		}
 		if pod != nil {
-			// A failed pod (RestartPolicy Never) never becomes ready: surface the
-			// reason immediately instead of waiting out the whole timeout.
+			// A container that cannot start (ImagePullBackOff, ErrImagePull,
+			// CreateContainerConfigError, CrashLoopBackOff) never becomes ready.
+			// Surface the reason immediately instead of waiting out the whole
+			// timeout: the caller's error is what an operator reads.
+			//
+			// Only a TERMINATED container with RestartPolicy=Never is `Failed`;
+			// a sandbox runs RestartPolicy=Always, so the waiting reason on the
+			// container STATUS is the signal (checking pod.Phase alone missed it
+			// and made WaitReady burn its entire timeout).
+			if reason := firstWaitingReason(pod); reason != "" {
+				return fmt.Errorf("sandbox %s cannot start: %s", name, reason)
+			}
 			if pod.Status.Phase == "Failed" {
 				return fmt.Errorf("sandbox %s exited: %s", name, firstFailureReason(pod))
 			}
@@ -73,4 +83,29 @@ func dialAddr(ctx context.Context, addr string) error {
 		return err
 	}
 	return conn.Close()
+}
+
+// firstWaitingReason returns a container's CURRENT waiting reason when it is a
+// failure the kubelet will not recover from on its own (an image that cannot be
+// pulled, a config error, a crash loop), prefixed with the message.
+//
+// A normal "ContainerCreating" is NOT a failure and is ignored: every pod
+// waits there for a moment.
+func firstWaitingReason(p *corev1.Pod) string {
+	for _, cs := range p.Status.ContainerStatuses {
+		w := cs.State.Waiting
+		if w == nil {
+			continue
+		}
+		switch w.Reason {
+		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
+			"CreateContainerConfigError", "CreateContainerError",
+			"CrashLoopBackOff", "RunContainerError":
+			if w.Message != "" {
+				return w.Reason + ": " + w.Message
+			}
+			return w.Reason
+		}
+	}
+	return ""
 }

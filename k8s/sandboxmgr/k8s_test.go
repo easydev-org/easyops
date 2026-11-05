@@ -9,7 +9,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/easy-platform/easyops/k8s/runtimeprofiles"
 )
@@ -411,5 +413,66 @@ func TestSandboxVolumeMounts(t *testing.T) {
 	}
 	if ro == nil || !ro.ReadOnly || ro.SubPath != "sub" {
 		t.Fatalf("/ro mount = %+v, want read-only subPath=sub", ro)
+	}
+}
+
+// TestDeleteReportsFailureInsteadOfLying pins that a delete which does not
+// actually take effect must NOT report success.
+//
+// The old Delete fell out of its wait loop and returned (true, nil) even when
+// the Deployment was still present, so a caller saw "deleted" while Get still
+// returned the sandbox (and a retry then "deleted" it a second time).
+func TestDeleteReportsFailureInsteadOfLying(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, _, err := c.Create(ctx, Spec{Name: "stuck", Image: "img:1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A finalizer that never clears (the fake clientset removes finalizers
+	// immediately, so swallow the Delete instead — the observable effect is the
+	// same: the Deployment stays).
+	c.cs.(*fake.Clientset).PrependReactor("delete", "deployments",
+		func(action k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, nil // pretend success, delete nothing
+		})
+
+	// Short-circuit the 30s wait by cancelling the context: the result must be
+	// an ERROR, never a silent success.
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ok, derr := c.Delete(cctx, "stuck")
+	if ok {
+		t.Fatal("Delete must not report success when the object is still present")
+	}
+	if derr == nil {
+		t.Fatal("Delete must return an error when the object is still present")
+	}
+	if _, found, gerr := c.Get(ctx, "stuck"); gerr != nil || !found {
+		t.Fatalf("the sandbox should still be visible (found=%v err=%v)", found, gerr)
+	}
+}
+
+// TestSandboxHasAShortTerminationGracePeriod pins the delete-latency fix.
+//
+// The k8s default grace period is 30s and the worker does not handle SIGTERM,
+// so every delete waited the full 30s; under Foreground propagation the
+// Deployment only disappears after its pod does, so a bounded delete timed out
+// and the sandbox looked undeletable.
+func TestSandboxHasAShortTerminationGracePeriod(t *testing.T) {
+	c := newTestClient()
+	ctx := context.Background()
+	if _, _, err := c.Create(ctx, Spec{Name: "grace", Image: "img:1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	d, err := c.cs.AppsV1().Deployments(c.namespace).Get(ctx, resourceName("grace"), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := d.Spec.Template.Spec.TerminationGracePeriodSeconds
+	if g == nil {
+		t.Fatal("a sandbox must set terminationGracePeriodSeconds (the default delays every delete by 30s)")
+	}
+	if *g > 10 {
+		t.Fatalf("terminationGracePeriodSeconds = %d, want a short value", *g)
 	}
 }
