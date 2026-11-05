@@ -18,7 +18,7 @@ fi
 
 PKGS=("$@")
 if [ ${#PKGS[@]} -eq 0 ]; then
-  PKGS=(./k8s/sandboxmgr/ ./k8s/servicesmgr/ ./k8s/jobmgr/)
+  PKGS=(./k8s/sandboxmgr/ ./k8s/servicesmgr/ ./k8s/jobmgr/ ./internal/rpce2e/)
 fi
 
 # Diagnostics on failure: the tests report a pod reason, but the EVENTS are what
