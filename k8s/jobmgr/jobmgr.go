@@ -70,6 +70,11 @@ type Spec struct {
 	// Owner/Session are stamped as annotations (List filters by owner).
 	Owner   string
 	Session string
+	// Tenant is the caller's tenant-internal namespace. It is stamped as a
+	// LABEL (never used as the Kubernetes namespace: the server pins that from
+	// its own config, or a caller could run a container anywhere in the
+	// cluster).
+	Tenant string
 	// Untrusted marks the job as running UNTRUSTED code (the CI case). It forces
 	// automountServiceAccountToken=false, a non-root, read-only-rootfs,
 	// no-capabilities security context, and forbids `privileged`. A job that
@@ -295,6 +300,7 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 			Labels:    map[string]string{LabelManaged: "1", LabelName: s.Name},
 			Annotations: map[string]string{
 				AnnoImage: s.Image, AnnoCreator: s.Owner, AnnoSession: s.Session,
+				AnnoNamespace: s.Tenant,
 			},
 		},
 		Spec: batchv1.JobSpec{

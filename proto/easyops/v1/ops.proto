@@ -881,8 +881,17 @@ message CreateJobRequest {
   int32 ttl_seconds_after_finished = 14;
   repeated JobVolumeMount volumes = 15;
   map<string, string> node_selector = 16;
-  repeated string service_account = 17; // 0 or 1 entries (batch/v1 takes one)
+  repeated string service_account = 17; // rejected: a job never gets a token
   bool privileged = 18; // requires an explicitly privileged runtime profile
+  // wait, when true, blocks (bounded by wait_seconds) until the job reaches a
+  // terminal state, so a short command returns its result inline.
+  //
+  // Default false: a CI step is submitted and then polled (GetJob /
+  // JobLogs), and a blocking create would pin a request for up to the timeout
+  // and make the RPC unusable for anything long-running.
+  bool wait = 19;
+  // wait_seconds bounds `wait` (0 = the server default).
+  int32 wait_seconds = 20;
 }
 message CreateJobResponse { JobInfo job = 1; }
 

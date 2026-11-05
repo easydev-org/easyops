@@ -29,15 +29,19 @@ func (s *Service) CreateBuild(ctx context.Context, req *opsv1.CreateBuildRequest
 	if s.builds == nil {
 		return nil, errNoBuildRegistry()
 	}
-	if s.builder == nil {
-		return nil, errNoImageBackend()
-	}
 	m := req
+	// Validate the REQUEST before checking whether a backend exists: a caller
+	// that sends a malformed request must be told so (InvalidArgument) on any
+	// deployment, not "backend unavailable" — which would hide a real client bug
+	// and make the same request behave differently depending on configuration.
 	if len(m.GetArchive()) == 0 {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "archive is required")
 	}
 	if m.GetRepo() == "" || m.GetTag() == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "repo and tag are required")
+	}
+	if s.builder == nil {
+		return nil, errNoImageBackend()
 	}
 	// Extract NOW, synchronously: the archive is request-scoped memory and is
 	// gone once this call returns, so the background goroutine cannot read it

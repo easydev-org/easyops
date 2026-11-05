@@ -303,6 +303,18 @@ func (c *Client) Create(ctx context.Context, s Spec) (Sandbox, string, error) {
 		Ports:           []corev1.ContainerPort{{Name: "worker", ContainerPort: WorkerPort}},
 		Resources:       resources,
 		SecurityContext: s.Runtime.SecurityContext,
+		// Readiness is what WaitReady trusts, so it must be a REAL check of the
+		// worker: a TCP probe passes only once the worker has bound WorkerPort.
+		// Without it the pod reports Ready as soon as the container starts, which
+		// says nothing about the server being up.
+		ReadinessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(WorkerPort)},
+			},
+			InitialDelaySeconds: 1,
+			PeriodSeconds:       2,
+			FailureThreshold:    30,
+		},
 		// Always: a sandbox image tag (e.g. sandbox-macos:base) is REBUILT in
 		// place when the guest disk or worker changes, and a long-lived tag is
 		// otherwise served from the node's image cache — so an update would not

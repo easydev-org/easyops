@@ -7198,10 +7198,19 @@ type CreateJobRequest struct {
 	TtlSecondsAfterFinished int32             `protobuf:"varint,14,opt,name=ttl_seconds_after_finished,json=ttlSecondsAfterFinished,proto3" json:"ttl_seconds_after_finished,omitempty"`
 	Volumes                 []*JobVolumeMount `protobuf:"bytes,15,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	NodeSelector            map[string]string `protobuf:"bytes,16,rep,name=node_selector,json=nodeSelector,proto3" json:"node_selector,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	ServiceAccount          []string          `protobuf:"bytes,17,rep,name=service_account,json=serviceAccount,proto3" json:"service_account,omitempty"` // 0 or 1 entries (batch/v1 takes one)
+	ServiceAccount          []string          `protobuf:"bytes,17,rep,name=service_account,json=serviceAccount,proto3" json:"service_account,omitempty"` // rejected: a job never gets a token
 	Privileged              bool              `protobuf:"varint,18,opt,name=privileged,proto3" json:"privileged,omitempty"`                              // requires an explicitly privileged runtime profile
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// wait, when true, blocks (bounded by wait_seconds) until the job reaches a
+	// terminal state, so a short command returns its result inline.
+	//
+	// Default false: a CI step is submitted and then polled (GetJob /
+	// JobLogs), and a blocking create would pin a request for up to the timeout
+	// and make the RPC unusable for anything long-running.
+	Wait bool `protobuf:"varint,19,opt,name=wait,proto3" json:"wait,omitempty"`
+	// wait_seconds bounds `wait` (0 = the server default).
+	WaitSeconds   int32 `protobuf:"varint,20,opt,name=wait_seconds,json=waitSeconds,proto3" json:"wait_seconds,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateJobRequest) Reset() {
@@ -7358,6 +7367,20 @@ func (x *CreateJobRequest) GetPrivileged() bool {
 		return x.Privileged
 	}
 	return false
+}
+
+func (x *CreateJobRequest) GetWait() bool {
+	if x != nil {
+		return x.Wait
+	}
+	return false
+}
+
+func (x *CreateJobRequest) GetWaitSeconds() int32 {
+	if x != nil {
+		return x.WaitSeconds
+	}
+	return 0
 }
 
 type CreateJobResponse struct {
@@ -8540,7 +8563,7 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\n" +
 	"mount_path\x18\x03 \x01(\tR\tmountPath\x12\x19\n" +
 	"\bsub_path\x18\x04 \x01(\tR\asubPath\x12\x1b\n" +
-	"\tread_only\x18\x05 \x01(\bR\breadOnly\"\xa9\x06\n" +
+	"\tread_only\x18\x05 \x01(\bR\breadOnly\"\xe0\x06\n" +
 	"\x10CreateJobRequest\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x18\n" +
 	"\asession\x18\x02 \x01(\tR\asession\x12\x12\n" +
@@ -8562,7 +8585,9 @@ const file_easyops_v1_ops_proto_rawDesc = "" +
 	"\x0fservice_account\x18\x11 \x03(\tR\x0eserviceAccount\x12\x1e\n" +
 	"\n" +
 	"privileged\x18\x12 \x01(\bR\n" +
-	"privileged\x1a6\n" +
+	"privileged\x12\x12\n" +
+	"\x04wait\x18\x13 \x01(\bR\x04wait\x12!\n" +
+	"\fwait_seconds\x18\x14 \x01(\x05R\vwaitSeconds\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a?\n" +
