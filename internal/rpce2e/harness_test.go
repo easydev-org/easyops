@@ -109,14 +109,16 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(srv.Close)
 
 	mk := func(withToken string) opsv1connect.OpsServiceClient {
-		var ic connect.ClientInterceptor
+		transport := connecthttp.NewTransport(&http.Client{}, srv.URL)
+		// connect v2's chainClientInterceptors dereferences every interceptor, so
+		// a nil entry PANICS (it does not skip it). The anonymous client must be
+		// built with NO interceptor argument at all.
+		var c *connect.Client
 		if withToken != "" {
-			ic = bearer(withToken)
+			c = connect.NewClient(transport, bearer(withToken))
+		} else {
+			c = connect.NewClient(transport)
 		}
-		c := connect.NewClient(
-			connecthttp.NewTransport(&http.Client{}, srv.URL),
-			ic,
-		)
 		return opsv1connect.NewOpsServiceClient(c)
 	}
 	return &harness{
