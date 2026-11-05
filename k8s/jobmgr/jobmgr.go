@@ -376,21 +376,25 @@ func (c *Client) Create(ctx context.Context, s Spec) (*Job, error) {
 		t := s.TTLSecondsAfterFinished
 		job.Spec.TTLSecondsAfterFinished = &t
 	}
+
+	// Companion services MUST exist (and have a ready endpoint) BEFORE the Job
+	// is created. A job that starts at the same instant as its database cannot
+	// resolve the Service name yet and its first connection fails immediately —
+	// the k3d integration suite caught exactly that ("NO_DNS" / BackoffLimit).
+	// Creating them first also means a failed companion setup fails the Create
+	// call instead of leaving a job that is doomed to fail.
+	if err := c.createServices(ctx, ns, s); err != nil {
+		return nil, err
+	}
+	if err := c.waitServicesReady(ctx, s); err != nil {
+		return nil, err
+	}
+
 	created, err := c.cs.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if apierrors.IsAlreadyExists(err) {
 		return nil, ErrExists
 	}
 	if err != nil {
-		return nil, err
-	}
-	// Companion services are created BEFORE the job and awaited: a job that
-	// starts at the same instant as its database cannot resolve the Service name
-	// (no endpoints yet) and its first connection fails immediately. Waiting for
-	// the endpoints is the only deterministic ordering.
-	if err := c.createServices(ctx, ns, s); err != nil {
-		return nil, err
-	}
-	if err := c.waitServicesReady(ctx, s); err != nil {
 		return nil, err
 	}
 	return c.view(ctx, created), nil
